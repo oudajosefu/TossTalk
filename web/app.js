@@ -3,6 +3,22 @@ const AUDIO_CHAR_UUID = '9f8d0002-6b7b-4f26-b10f-3aa861aa0001';
 const BATT_CHAR_UUID = '9f8d0003-6b7b-4f26-b10f-3aa861aa0001';
 const STATE_CHAR_UUID = '9f8d0004-6b7b-4f26-b10f-3aa861aa0001';
 
+const AUDIO_CODEC_PCM16 = 0;
+const AUDIO_CODEC_IMA_ADPCM = 1;
+
+const ADPCM_INDEX_TABLE = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+const ADPCM_STEP_TABLE = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19,
+  21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55,
+  60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157,
+  173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+  494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282,
+  1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660,
+  4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+  11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+  32767,
+];
+
 const connectBtn = document.getElementById('connectBtn');
 const flashBtn = document.getElementById('flashBtn');
 const connState = document.getElementById('connState');
@@ -81,15 +97,70 @@ function playPcm16(sampleRate, pcmBytes) {
   scheduleAt += buffer.duration;
 }
 
+function playPcm16Samples(sampleRate, int16) {
+  ensureAudio();
+
+  const floatData = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    floatData[i] = int16[i] / 32768;
+  }
+
+  const buffer = audioContext.createBuffer(1, floatData.length, sampleRate);
+  buffer.copyToChannel(floatData, 0);
+
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+
+  const now = audioContext.currentTime;
+  scheduleAt = Math.max(scheduleAt, now + 0.02);
+  source.start(scheduleAt);
+  scheduleAt += buffer.duration;
+}
+
+function decodeImaAdpcm(data, sampleCount, predictor, index) {
+  const out = new Int16Array(sampleCount);
+  let pred = predictor;
+  let idx = Math.min(88, Math.max(0, index));
+  let o = 0;
+
+  for (let i = 0; i < data.length && o < sampleCount; i++) {
+    const byte = data[i];
+    const n0 = byte & 0x0f;
+    const n1 = (byte >> 4) & 0x0f;
+
+    for (const nibble of [n0, n1]) {
+      let step = ADPCM_STEP_TABLE[idx];
+      let diff = step >> 3;
+      if (nibble & 0x01) diff += step >> 2;
+      if (nibble & 0x02) diff += step >> 1;
+      if (nibble & 0x04) diff += step;
+
+      if (nibble & 0x08) pred -= diff;
+      else pred += diff;
+
+      pred = Math.max(-32768, Math.min(32767, pred));
+      idx += ADPCM_INDEX_TABLE[nibble];
+      idx = Math.max(0, Math.min(88, idx));
+
+      out[o++] = pred;
+      if (o >= sampleCount) break;
+    }
+  }
+
+  return out;
+}
+
 function handleAudioFrame(event) {
   const dv = event.target.value;
-  if (!dv || dv.byteLength < 6) return;
+  if (!dv || dv.byteLength < 8) return;
 
   const seq = dv.getUint16(0, true);
   const sampleRate = dv.getUint16(2, true);
   const sampleCount = dv.getUint8(4);
   const flags = dv.getUint8(5);
-  const payload = new Uint8Array(dv.buffer, dv.byteOffset + 6, dv.byteLength - 6);
+  const codec = dv.getUint8(6);
+  const payload = new Uint8Array(dv.buffer, dv.byteOffset + 8, dv.byteLength - 8);
 
   if (lastSeq !== null) {
     const delta = (seq - lastSeq + 65536) % 65536;
@@ -106,7 +177,16 @@ function handleAudioFrame(event) {
     return;
   }
 
-  if (payload.byteLength >= sampleCount * 2) {
+  if (codec === AUDIO_CODEC_IMA_ADPCM) {
+    if (payload.byteLength >= 4) {
+      const headerOffset = dv.byteOffset + 8;
+      const predictor = dv.getInt16(8, true);
+      const index = dv.getUint8(10);
+      const adpcm = new Uint8Array(dv.buffer, headerOffset + 4, dv.byteLength - 12);
+      const pcm = decodeImaAdpcm(adpcm, sampleCount, predictor, index);
+      playPcm16Samples(sampleRate, pcm);
+    }
+  } else if (codec === AUDIO_CODEC_PCM16 && payload.byteLength >= sampleCount * 2) {
     playPcm16(sampleRate, payload);
   }
 

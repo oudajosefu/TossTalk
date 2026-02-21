@@ -43,6 +43,33 @@ size_t micWriteIndex = 0;
 size_t micReadIndex = 0;
 size_t micQueued = 0;
 
+static constexpr uint8_t AUDIO_CODEC_PCM16 = 0;
+static constexpr uint8_t AUDIO_CODEC_IMA_ADPCM = 1;
+
+struct AdpcmState {
+  int predictor = 0;
+  int index = 0;
+};
+
+AdpcmState adpcmState;
+
+static const int kAdpcmIndexTable[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8,
+};
+
+static const int kAdpcmStepTable[89] = {
+    7,     8,     9,     10,    11,    12,    13,    14,    16,    17,    19,
+    21,    23,    25,    28,    31,    34,    37,    41,    45,    50,    55,
+    60,    66,    73,    80,    88,    97,    107,   118,   130,   143,   157,
+    173,   190,   209,   230,   253,   279,   307,   337,   371,   408,   449,
+    494,   544,   598,   658,   724,   796,   876,   963,   1060,  1166,  1282,
+    1411,  1552,  1707,  1878,  2066,  2272,  2499,  2749,  3024,  3327,  3660,
+    4026,  4428,  4871,  5358,  5894,  6484,  7132,  7845,  8630,  9493,  10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767,
+};
+
 uint8_t lastBatteryPercent = 0;
 bool lastCharging = false;
 
@@ -198,6 +225,48 @@ void updateBattery() {
   }
 }
 
+uint8_t encodeAdpcmSample(int16_t sample, AdpcmState& st) {
+  int step = kAdpcmStepTable[st.index];
+  int diff = static_cast<int>(sample) - st.predictor;
+  uint8_t code = 0;
+
+  if (diff < 0) {
+    code = 8;
+    diff = -diff;
+  }
+
+  int delta = step >> 3;
+  if (diff >= step) {
+    code |= 4;
+    diff -= step;
+    delta += step;
+  }
+  if (diff >= (step >> 1)) {
+    code |= 2;
+    diff -= (step >> 1);
+    delta += (step >> 1);
+  }
+  if (diff >= (step >> 2)) {
+    code |= 1;
+    delta += (step >> 2);
+  }
+
+  if (code & 8) {
+    st.predictor -= delta;
+  } else {
+    st.predictor += delta;
+  }
+
+  if (st.predictor > 32767) st.predictor = 32767;
+  if (st.predictor < -32768) st.predictor = -32768;
+
+  st.index += kAdpcmIndexTable[code & 0x0F];
+  if (st.index < 0) st.index = 0;
+  if (st.index > 88) st.index = 88;
+
+  return code & 0x0F;
+}
+
 void queueMicCapture() {
   if (!micAvailable) return;
 
@@ -245,25 +314,45 @@ void sendMicAudioFrame() {
   if (!talkOpen) flags |= 0x01;
   if (!micAvailable) flags |= 0x02;
 
-  uint8_t frame[2 + 2 + 1 + 1 + AUDIO_SAMPLE_COUNT * 2];
+  constexpr uint8_t codec = AUDIO_CODEC_IMA_ADPCM;
+  constexpr uint8_t reserved = 0;
+  constexpr uint8_t adpcmHeaderBytes = 4;  // predictor:i16 + index:u8 + reserved:u8
+  constexpr uint8_t adpcmDataBytes = AUDIO_SAMPLE_COUNT / 2;
+
+  uint8_t frame[2 + 2 + 1 + 1 + 1 + 1 + adpcmHeaderBytes + adpcmDataBytes];
   frame[0] = static_cast<uint8_t>(seq & 0xFF);
   frame[1] = static_cast<uint8_t>((seq >> 8) & 0xFF);
   frame[2] = static_cast<uint8_t>(AUDIO_SAMPLE_RATE & 0xFF);
   frame[3] = static_cast<uint8_t>((AUDIO_SAMPLE_RATE >> 8) & 0xFF);
   frame[4] = AUDIO_SAMPLE_COUNT;
   frame[5] = flags;
+  frame[6] = codec;
+  frame[7] = reserved;
 
   int16_t samples[AUDIO_SAMPLE_COUNT];
   const bool haveMicFrame = popMicFrame(samples);
 
   for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
-    int16_t sample = 0;
-    if (talkOpen && haveMicFrame) {
-      sample = samples[i];
+    if (!(talkOpen && haveMicFrame)) {
+      samples[i] = 0;
     }
-    frame[6 + i * 2] = static_cast<uint8_t>(sample & 0xFF);
-    frame[6 + i * 2 + 1] = static_cast<uint8_t>((sample >> 8) & 0xFF);
   }
+
+  AdpcmState encodeState = adpcmState;
+
+  frame[8] = static_cast<uint8_t>(encodeState.predictor & 0xFF);
+  frame[9] = static_cast<uint8_t>((encodeState.predictor >> 8) & 0xFF);
+  frame[10] = static_cast<uint8_t>(encodeState.index & 0xFF);
+  frame[11] = 0;
+
+  size_t out = 12;
+  for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; i += 2) {
+    const uint8_t n0 = encodeAdpcmSample(samples[i], encodeState);
+    const uint8_t n1 = encodeAdpcmSample(samples[i + 1], encodeState);
+    frame[out++] = static_cast<uint8_t>((n1 << 4) | n0);
+  }
+
+  adpcmState = encodeState;
 
   audioChar->setValue(frame, sizeof(frame));
   audioChar->notify();

@@ -1,4 +1,4 @@
-# BLE Protocol (Draft v0)
+# BLE Protocol (Draft v1)
 
 Service UUID:
 
@@ -13,11 +13,24 @@ Characteristics:
 
 ## Audio frame (notify payload)
 
-`[seq:u16][sampleRate:u16][sampleCount:u8][flags:u8][pcm16le...]`
+`[seq:u16][sampleRate:u16][sampleCount:u8][flags:u8][codec:u8][reserved:u8][payload...]`
 
 - `flags bit0`: muted by motion
+- `flags bit1`: mic unavailable
 - `sampleRate`: initial target 8000
 - `sampleCount`: 160 for 20 ms @ 8 kHz
+
+`codec` enum:
+
+- `0` = PCM16LE
+- `1` = IMA ADPCM
+
+For `codec=1`, payload format is:
+
+`[predictor:i16le][index:u8][reserved:u8][adpcm-nibbles...]`
+
+- ADPCM nibble packing: low nibble first, then high nibble
+- For 160 samples, ADPCM data is 80 bytes
 
 ## Battery payload
 
