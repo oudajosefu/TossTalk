@@ -70,6 +70,7 @@ const stats = {
   drops: 0,
   mutedFrames: 0,
   concealedFrames: 0,
+  truncatedFrames: 0,
 };
 
 function updateStatsUi() {
@@ -166,6 +167,28 @@ function gateName(v) {
     default:
       return `Unknown(${v})`;
   }
+}
+
+function getBluetoothUnavailableMessage() {
+  const reasons = [];
+
+  if (!window.isSecureContext) {
+    reasons.push('This page is not running in a secure context (HTTPS required).');
+  }
+
+  if (!('bluetooth' in navigator)) {
+    reasons.push('Web Bluetooth API is not available in this browser build.');
+  }
+
+  return [
+    'Bluetooth connection is unavailable on this browser.',
+    ...reasons,
+    '',
+    'Try one of these:',
+    '- Use Google Chrome or Microsoft Edge desktop',
+    '- Ensure Linux Bluetooth is enabled and working',
+    '- Open this app over HTTPS (or localhost for local testing)',
+  ].join('\n');
 }
 
 function ensureAudio() {
@@ -353,6 +376,14 @@ function handleAudioFrame(event) {
   }
 
   if (codec === AUDIO_CODEC_IMA_ADPCM) {
+    const expectedBytes = 8 + 4 + Math.floor(sampleCount / 2);
+    if (dv.byteLength < expectedBytes) {
+      stats.truncatedFrames += 1;
+      if (stats.truncatedFrames % 20 === 1) {
+        log(`Audio frame appears truncated (${dv.byteLength} bytes, expected ~${expectedBytes})`);
+      }
+    }
+
     if (payload.byteLength >= 4) {
       const headerOffset = dv.byteOffset + 8;
       const predictor = dv.getInt16(8, true);
@@ -397,7 +428,10 @@ function handleState(event) {
 
 async function connectBle() {
   if (!('bluetooth' in navigator)) {
-    alert('Web Bluetooth unavailable in this browser. Use desktop Chromium.');
+    const msg = getBluetoothUnavailableMessage();
+    connState.textContent = 'Web Bluetooth unavailable';
+    log(msg.replaceAll('\n', ' | '));
+    alert(msg);
     return;
   }
 

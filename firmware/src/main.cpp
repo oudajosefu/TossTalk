@@ -362,12 +362,15 @@ void sendMicAudioFrame() {
 void setupBle() {
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  NimBLEDevice::setMTU(247);
 
   bleServer = NimBLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
   auto* service = bleServer->createService(SERVICE_UUID);
 
-  audioChar = service->createCharacteristic(AUDIO_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);
+  // Audio frames are larger than 20 bytes; increase characteristic value length
+  // to avoid implicit truncation.
+  audioChar = service->createCharacteristic(AUDIO_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY, 244);
   batteryChar = service->createCharacteristic(
       BATT_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   stateChar = service->createCharacteristic(
