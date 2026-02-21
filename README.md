@@ -11,6 +11,7 @@ Throwable classroom microphone prototype for M5StickC Plus2.
 - ✅ PWA shell for desktop Chromium with Web Bluetooth connect flow
 - ✅ Auto-reconnect and stream stats in web console
 - ✅ Web Serial flashing page stub (Chromium-only path)
+- ✅ Initial microphone capture over BLE frames (8 kHz PCM)
 - 🚧 Near-live BLE audio quality tuning and robust IMU thresholds
 
 ## Product constraints

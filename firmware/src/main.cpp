@@ -31,9 +31,17 @@ uint32_t lastBatteryTickMs = 0;
 uint32_t lastBatteryNotifyMs = 0;
 uint32_t lastAudioTickMs = 0;
 uint32_t seq = 0;
-float tonePhase = 0.0f;
 
 bool bleClientConnected = false;
+bool micAvailable = false;
+
+static constexpr uint16_t AUDIO_SAMPLE_RATE = 8000;
+static constexpr uint8_t AUDIO_SAMPLE_COUNT = 160;  // 20 ms @ 8 kHz
+static constexpr size_t MIC_RING_SIZE = 4;
+int16_t micRing[MIC_RING_SIZE][AUDIO_SAMPLE_COUNT] = {};
+size_t micWriteIndex = 0;
+size_t micReadIndex = 0;
+size_t micQueued = 0;
 
 uint8_t lastBatteryPercent = 0;
 bool lastCharging = false;
@@ -55,12 +63,14 @@ const char* gateStateName(GateState s) {
 }
 
 void drawRuntimeStatus() {
-  M5.Display.fillRect(0, 50, M5.Display.width(), 46, TFT_BLACK);
+  M5.Display.fillRect(0, 50, M5.Display.width(), 66, TFT_BLACK);
   M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
   M5.Display.setCursor(4, 54);
   M5.Display.printf("%s", gateStateName(gateState));
   M5.Display.setCursor(4, 74);
   M5.Display.printf("BLE %s", bleClientConnected ? "connected" : "waiting");
+  M5.Display.setCursor(4, 94);
+  M5.Display.printf("MIC %s", micAvailable ? "ready" : "not-ready");
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
@@ -188,36 +198,68 @@ void updateBattery() {
   }
 }
 
-void sendTestAudioFrame() {
+void queueMicCapture() {
+  if (!micAvailable) return;
+
+  while (M5.Mic.isRecording() < 2) {
+    if (!M5.Mic.record(micRing[micWriteIndex], AUDIO_SAMPLE_COUNT, AUDIO_SAMPLE_RATE, false)) {
+      break;
+    }
+
+    micWriteIndex = (micWriteIndex + 1) % MIC_RING_SIZE;
+    if (micQueued < MIC_RING_SIZE) {
+      ++micQueued;
+    } else {
+      micReadIndex = (micReadIndex + 1) % MIC_RING_SIZE;
+    }
+  }
+}
+
+bool popMicFrame(int16_t* outSamples) {
+  if (!micAvailable || micQueued <= 1) {
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+      outSamples[i] = 0;
+    }
+    return false;
+  }
+
+  const int16_t* src = micRing[micReadIndex];
+  for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+    outSamples[i] = src[i];
+  }
+
+  micReadIndex = (micReadIndex + 1) % MIC_RING_SIZE;
+  --micQueued;
+  return true;
+}
+
+void sendMicAudioFrame() {
   const uint32_t now = millis();
   if (now - lastAudioTickMs < 20) return;
   lastAudioTickMs = now;
 
-  constexpr uint16_t sampleRate = 8000;
-  constexpr uint8_t sampleCount = 160;  // 20 ms @ 8 kHz
-  constexpr float toneFreq = 440.0f;
+  queueMicCapture();
 
   const bool talkOpen = (gateState == GateState::UnmutedLive || gateState == GateState::Reacquire);
-  const uint8_t flags = static_cast<uint8_t>(talkOpen ? 0 : 0x01);
+  uint8_t flags = 0;
+  if (!talkOpen) flags |= 0x01;
+  if (!micAvailable) flags |= 0x02;
 
-  uint8_t frame[2 + 2 + 1 + 1 + sampleCount * 2];
+  uint8_t frame[2 + 2 + 1 + 1 + AUDIO_SAMPLE_COUNT * 2];
   frame[0] = static_cast<uint8_t>(seq & 0xFF);
   frame[1] = static_cast<uint8_t>((seq >> 8) & 0xFF);
-  frame[2] = static_cast<uint8_t>(sampleRate & 0xFF);
-  frame[3] = static_cast<uint8_t>((sampleRate >> 8) & 0xFF);
-  frame[4] = sampleCount;
+  frame[2] = static_cast<uint8_t>(AUDIO_SAMPLE_RATE & 0xFF);
+  frame[3] = static_cast<uint8_t>((AUDIO_SAMPLE_RATE >> 8) & 0xFF);
+  frame[4] = AUDIO_SAMPLE_COUNT;
   frame[5] = flags;
 
-  // TODO: Replace with real microphone capture. For now, send low-level tone
-  // while talk path is open and zeros while motion-muted.
-  constexpr float twoPi = 6.28318530718f;
-  const float phaseStep = twoPi * toneFreq / static_cast<float>(sampleRate);
-  for (int i = 0; i < sampleCount; ++i) {
+  int16_t samples[AUDIO_SAMPLE_COUNT];
+  const bool haveMicFrame = popMicFrame(samples);
+
+  for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
     int16_t sample = 0;
-    if (talkOpen) {
-      sample = static_cast<int16_t>(std::sin(tonePhase) * 1800.0f);
-      tonePhase += phaseStep;
-      if (tonePhase > twoPi) tonePhase -= twoPi;
+    if (talkOpen && haveMicFrame) {
+      sample = samples[i];
     }
     frame[6 + i * 2] = static_cast<uint8_t>(sample & 0xFF);
     frame[6 + i * 2 + 1] = static_cast<uint8_t>((sample >> 8) & 0xFF);
@@ -255,6 +297,18 @@ void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
 
+  auto micCfg = M5.Mic.config();
+  micCfg.sample_rate = AUDIO_SAMPLE_RATE;
+  micCfg.over_sampling = 1;
+  micCfg.noise_filter_level = 32;
+  micCfg.magnification = micCfg.use_adc ? 16 : 1;
+  micCfg.dma_buf_count = 8;
+  micCfg.dma_buf_len = AUDIO_SAMPLE_COUNT;
+  M5.Mic.config(micCfg);
+
+  M5.Speaker.end();
+  micAvailable = M5.Mic.isEnabled() && M5.Mic.begin();
+
   M5.Display.setRotation(1);
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setTextSize(2);
@@ -265,11 +319,13 @@ void setup() {
   drawBatteryHud(M5.Power.getBatteryLevel(), M5.Power.isCharging());
   notifyGateState();
   drawRuntimeStatus();
+
+  queueMicCapture();
 }
 
 void loop() {
   M5.update();
   updateGateState();
   updateBattery();
-  sendTestAudioFrame();
+  sendMicAudioFrame();
 }
