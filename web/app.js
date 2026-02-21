@@ -90,6 +90,17 @@ function setFlashStatus(text) {
   log(`FLASH: ${text}`);
 }
 
+function formatError(err) {
+  if (!err) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (err?.message) return String(err.message);
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 function parseAddress(value) {
   const input = value.trim().toLowerCase();
   if (input.startsWith('0x')) return Number.parseInt(input.slice(2), 16);
@@ -497,13 +508,6 @@ async function startFlashFlow() {
     const chip = await loader.main('default_reset');
     log(`Connected to chip: ${chip}`);
 
-    try {
-      setFlashStatus('Uploading flasher stub...');
-      await loader.runStub();
-    } catch (err) {
-      log(`Stub upload skipped: ${err.message}`);
-    }
-
     setFlashStatus('Writing firmware...');
     await loader.writeFlash({
       fileArray: [{ address: flashAddress, data: firmware.data }],
@@ -511,7 +515,9 @@ async function startFlashFlow() {
       flashFreq: 'keep',
       flashSize: 'keep',
       eraseAll: Boolean(eraseAllInput.checked),
-      compress: true,
+      // Some browser/CDN builds of esptool-js can fail in compressed mode.
+      // Keep this off for reliability in classroom flows.
+      compress: false,
       reportProgress: (_fileIndex, written, total) => {
         const pct = total > 0 ? Math.round((written / total) * 100) : 0;
         flashProgress.value = pct;
@@ -523,7 +529,7 @@ async function startFlashFlow() {
     await loader.after('hard_reset');
     setFlashStatus(`Flash successful: ${firmware.name}`);
   } catch (err) {
-    setFlashStatus(`Flash failed: ${err.message}`);
+    setFlashStatus(`Flash failed: ${formatError(err)}`);
     throw err;
   } finally {
     flashBtn.disabled = false;
