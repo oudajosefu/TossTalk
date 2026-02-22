@@ -372,16 +372,23 @@ async function connectBle() {
         }
         resetAudioPipeline();
 
+        // Give the device time to settle after GATT connect before we hit
+        // it with service discovery.  The firmware defers SPI/I2C work for
+        // a few seconds so the BLE host can respond to GATT requests.
+        connState.textContent = 'Waiting for device to settle...';
+        await new Promise(r => setTimeout(r, 1200));
+
         for (let st = 1; st <= 3; st++) {
           connState.textContent = `Service discovery (${st}/3)...`;
           try {
-            service = await withTimeout(server.getPrimaryService(SERVICE_UUID), 5000, 'Service');
+            service = await withTimeout(server.getPrimaryService(SERVICE_UUID), 8000, 'Service');
             break;
           } catch (e) {
             log(`Service try ${st}/3 failed: ${formatError(e)}`);
             if (!device.gatt.connected) {
-              await new Promise(r => setTimeout(r, 300));
+              await new Promise(r => setTimeout(r, 800));
               server = await withTimeout(device.gatt.connect(), 12000, 'GATT reconnect');
+              await new Promise(r => setTimeout(r, 1200));
             }
             if (st === 3) throw e;
           }

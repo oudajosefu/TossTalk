@@ -68,6 +68,11 @@ uint32_t bleConnectedAtMs   = 0;
 uint16_t bleConnHandle      = 0xFFFF;
 bool     firstAudioSent     = false;
 bool     micAvailable       = false;
+volatile bool displayDirty  = false;  // set in BLE callbacks, drawn in loop()
+
+// How long after connect to avoid heavy work (SPI/I2C) so the BLE stack
+// can handle service discovery + characteristic resolution unimpeded.
+static constexpr uint32_t BLE_SETTLING_MS = 3500;
 
 // ── Audio capture ────────────────────────────────────────────────────────
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
@@ -155,17 +160,16 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedAtMs   = millis();
     bleConnHandle      = desc->conn_handle;
     firstAudioSent     = false;
-    Serial.printf("[BLE] Connected handle=%u MTU=%u\n",
-                  bleConnHandle, ble_att_mtu(bleConnHandle));
-    drawRuntimeStatus();
+    displayDirty       = true;  // never do SPI here – it blocks the BLE host task
+    Serial.printf("[BLE] Connected handle=%u\n", bleConnHandle);
   }
   void onDisconnect(NimBLEServer* pServer) override {
     bleClientConnected = false;
     bleConnectedAtMs   = 0;
     bleConnHandle      = 0xFFFF;
     firstAudioSent     = false;
+    displayDirty       = true;
     Serial.println("[BLE] Disconnected");
-    drawRuntimeStatus();
     pServer->startAdvertising();
   }
 };
@@ -402,7 +406,9 @@ void sendMicAudioFrame() {
 void setupBle() {
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-  NimBLEDevice::setMTU(247);  // request large, but protocol works at MTU 23
+  // Do NOT call setMTU() – server-initiated MTU exchange collides with
+  // browser service discovery on Windows BLE stacks, causing disconnects.
+  // Our 20-byte sub-packets fit in the default MTU 23.
 
   bleServer = NimBLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
@@ -451,8 +457,25 @@ void setup() {
 }
 
 void loop() {
-  M5.update();
-  updateGateState();
-  updateBattery();
+  // If BLE just connected, avoid SPI/I2C work for a few seconds so the
+  // NimBLE stack can handle service discovery without bus contention.
+  const bool settling = bleClientConnected &&
+                        (millis() - bleConnectedAtMs < BLE_SETTLING_MS);
+
+  if (!settling) {
+    M5.update();
+    updateGateState();
+    updateBattery();
+  }
+
+  // Process display updates deferred from BLE callbacks
+  if (displayDirty && !settling) {
+    displayDirty = false;
+    drawRuntimeStatus();
+  }
+
   sendMicAudioFrame();
+
+  // Yield so the NimBLE FreeRTOS task gets CPU on single-core configs
+  delay(1);
 }
