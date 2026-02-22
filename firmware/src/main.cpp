@@ -29,8 +29,12 @@
 
 #include <M5Unified.h>
 #include <NimBLEDevice.h>
-#include <host/ble_hs_id.h>   // ble_hs_id_set_rnd()
 #include <cmath>
+
+// Forward-declare the NimBLE C function we need for setting a random address.
+// The header (host/ble_hs_id.h) isn't on the NimBLE-Arduino 1.4.x include
+// path, but the symbol is compiled into the library.
+extern "C" int ble_hs_id_set_rnd(const uint8_t *rnd_addr);
 
 // ── UUIDs ────────────────────────────────────────────────────────────────
 static const char* DEVICE_NAME       = "TossTalk";
