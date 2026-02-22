@@ -372,23 +372,26 @@ async function connectBle() {
         }
         resetAudioPipeline();
 
-        // Give the device time to settle after GATT connect before we hit
-        // it with service discovery.  The firmware defers SPI/I2C work for
-        // a few seconds so the BLE host can respond to GATT requests.
+        // Give the device 3 seconds to settle — the firmware's loop() yields
+        // 100 % of CPU to the NimBLE stack for 5 s after connect so that
+        // service discovery can complete without bus contention.
         connState.textContent = 'Waiting for device to settle...';
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, 3000));
 
         for (let st = 1; st <= 3; st++) {
           connState.textContent = `Service discovery (${st}/3)...`;
           try {
-            service = await withTimeout(server.getPrimaryService(SERVICE_UUID), 8000, 'Service');
+            service = await withTimeout(server.getPrimaryService(SERVICE_UUID), 10000, 'Service');
             break;
           } catch (e) {
             log(`Service try ${st}/3 failed: ${formatError(e)}`);
             if (!device.gatt.connected) {
-              await new Promise(r => setTimeout(r, 800));
+              log('⚠️ Connection lost during discovery. If this keeps happening, go to ' +
+                  'Windows Settings → Bluetooth & devices, find "TossTalk", click Remove, ' +
+                  'then retry. Windows caches stale BLE service tables.');
+              await new Promise(r => setTimeout(r, 1000));
               server = await withTimeout(device.gatt.connect(), 12000, 'GATT reconnect');
-              await new Promise(r => setTimeout(r, 1200));
+              await new Promise(r => setTimeout(r, 3000));
             }
             if (st === 3) throw e;
           }

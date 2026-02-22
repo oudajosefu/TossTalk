@@ -70,9 +70,9 @@ bool     firstAudioSent     = false;
 bool     micAvailable       = false;
 volatile bool displayDirty  = false;  // set in BLE callbacks, drawn in loop()
 
-// How long after connect to avoid heavy work (SPI/I2C) so the BLE stack
-// can handle service discovery + characteristic resolution unimpeded.
-static constexpr uint32_t BLE_SETTLING_MS = 3500;
+// How long after connect to avoid ALL non-BLE work so the NimBLE stack
+// can handle service discovery on single-core ESP32 unimpeded.
+static constexpr uint32_t BLE_SETTLING_MS = 5000;
 
 // ── Audio capture ────────────────────────────────────────────────────────
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
@@ -155,12 +155,13 @@ void drawBatteryHud(uint8_t percent, bool charging) {
 // ── BLE callbacks ────────────────────────────────────────────────────────
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
-    (void)pServer;
+    // Stop advertising while connected – frees radio time for GATT.
+    NimBLEDevice::getAdvertising()->stop();
     bleClientConnected = true;
     bleConnectedAtMs   = millis();
     bleConnHandle      = desc->conn_handle;
     firstAudioSent     = false;
-    displayDirty       = true;  // never do SPI here – it blocks the BLE host task
+    displayDirty       = true;  // draw from loop(), never SPI in BLE callback
     Serial.printf("[BLE] Connected handle=%u\n", bleConnHandle);
   }
   void onDisconnect(NimBLEServer* pServer) override {
@@ -170,7 +171,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     firstAudioSent     = false;
     displayDirty       = true;
     Serial.println("[BLE] Disconnected");
-    pServer->startAdvertising();
+    // Restart advertising so the device is discoverable again.
+    NimBLEDevice::getAdvertising()->start();
   }
 };
 
@@ -406,9 +408,16 @@ void sendMicAudioFrame() {
 void setupBle() {
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-  // Do NOT call setMTU() – server-initiated MTU exchange collides with
-  // browser service discovery on Windows BLE stacks, causing disconnects.
-  // Our 20-byte sub-packets fit in the default MTU 23.
+
+  // Delete all stored bonds so Windows/Edge doesn't use stale cached GATT
+  // attribute handles from a previous firmware version.
+  NimBLEDevice::deleteAllBonds();
+
+  // Disable bonding and security entirely – we don't need encryption for
+  // classroom audio, and bonding causes Windows to cache our GATT database
+  // which breaks when the firmware changes.
+  NimBLEDevice::setSecurityAuth(false, false, false);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
   bleServer = NimBLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
@@ -457,25 +466,28 @@ void setup() {
 }
 
 void loop() {
-  // If BLE just connected, avoid SPI/I2C work for a few seconds so the
-  // NimBLE stack can handle service discovery without bus contention.
+  // During the settling window after BLE connect, do NOTHING except yield
+  // CPU.  The ESP32-PICO is single-core; the NimBLE host task needs every
+  // spare cycle to handle service discovery, characteristic resolution,
+  // and CCCD writes from the browser.
   const bool settling = bleClientConnected &&
                         (millis() - bleConnectedAtMs < BLE_SETTLING_MS);
 
-  if (!settling) {
-    M5.update();
-    updateGateState();
-    updateBattery();
+  if (settling) {
+    delay(10);  // aggressive yield for BLE stack
+    return;
   }
 
+  M5.update();
+  updateGateState();
+  updateBattery();
+
   // Process display updates deferred from BLE callbacks
-  if (displayDirty && !settling) {
+  if (displayDirty) {
     displayDirty = false;
     drawRuntimeStatus();
   }
 
   sendMicAudioFrame();
-
-  // Yield so the NimBLE FreeRTOS task gets CPU on single-core configs
   delay(1);
 }
