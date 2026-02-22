@@ -435,25 +435,26 @@ void setupBle() {
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  // ── Force a fresh random-static address ────────────────────────────────
-  // Windows/Edge caches the GATT attribute table keyed by the device's MAC
-  // address.  Every firmware flash changes the GATT layout, but Windows
-  // keeps using the stale cached handles → disconnect during discovery.
-  // The Forget button in edge://bluetooth-internals is broken, so we
-  // sidestep the entire problem by presenting a new MAC address.
-  // Top two bits = 0b11 marks this as a "random static" address per BT spec.
+  // ── Generate a NEW random-static address on every boot ──────────────────
+  // Windows/Edge caches the GATT attribute table keyed by MAC address.
+  // The Forget button in chrome://bluetooth-internals is broken, so the
+  // only reliable way to force a fresh GATT discovery is to present a
+  // MAC address that Windows has never seen.  We generate a truly random
+  // one on every power cycle using esp_random() (hardware RNG).
   {
-    ble_addr_t addr;
-    addr.type = BLE_OWN_ADDR_RANDOM;
-    // Arbitrary bytes – change any byte here to get a fresh identity.
-    addr.val[0] = 0xAB;
-    addr.val[1] = 0xBB;
-    addr.val[2] = 0x11;
-    addr.val[3] = 0x22;
-    addr.val[4] = 0x33;
-    addr.val[5] = 0xC4;  // top 2 bits = 11 → random static
-    ble_hs_id_set_rnd(addr.val);
+    uint8_t rnd[6];
+    // esp_random() returns 32 bits of hardware-RNG entropy
+    uint32_t r0 = esp_random(), r1 = esp_random();
+    memcpy(rnd, &r0, 4);
+    memcpy(rnd + 4, &r1, 2);
+    rnd[5] = (rnd[5] & 0x3F) | 0xC0;  // top 2 bits = 11 → random static
+    // Ensure random part isn't all-ones or all-zeros (BT spec requirement)
+    if ((rnd[0] | rnd[1] | rnd[2] | rnd[3] | rnd[4] | (rnd[5] & 0x3F)) == 0)
+      rnd[0] = 0x01;
+    ble_hs_id_set_rnd(rnd);
     NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
+    Serial.printf("[BLE] Random MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  rnd[5], rnd[4], rnd[3], rnd[2], rnd[1], rnd[0]);
   }
 
   // Delete all stored bonds so the ESP32 side is clean too.

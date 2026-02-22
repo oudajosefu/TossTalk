@@ -386,8 +386,8 @@ async function connectBle() {
           } catch (e) {
             log(`Service try ${st}/3 failed: ${formatError(e)}`);
             if (!device.gatt.connected) {
-              log('⚠️ Connection lost during discovery. Try: open edge://bluetooth-internals, ' +
-                  'find TossTalk, and click Forget to clear the cached GATT table.');
+              log('⚠️ Connection lost during discovery. The device generates a new ' +
+                  'BLE address on each boot — try power-cycling the device and reconnecting.');
               await new Promise(r => setTimeout(r, 1000));
               server = await withTimeout(device.gatt.connect(), 12000, 'GATT reconnect');
               await new Promise(r => setTimeout(r, 3000));
