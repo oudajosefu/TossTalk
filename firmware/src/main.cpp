@@ -413,8 +413,39 @@ bool sendNextSubPacket() {
 void sendMicAudioFrame() {
   if (!canNotify()) return;
   const uint32_t now = millis();
+  const uint16_t mtu = ble_att_mtu(bleConnHandle);
 
-  // If we have a frame in flight, pace the sub-packets
+  // ── Single-packet mode (MTU >= 88) ──────────────────────────────────
+  // Send the entire 80-byte ADPCM frame + 5-byte header in one notification.
+  // This is 5× fewer mbufs and vastly more reliable than sub-packets.
+  if (mtu >= 88) {
+    if (now - lastAudioTickMs < 20) return;
+    lastAudioTickMs = now;
+
+    encodeNewFrame();
+
+    uint8_t pkt[85];
+    pkt[0] = txFrameSeq;
+    pkt[1] = 0x00 | txMutedBit;
+    pkt[2] = static_cast<uint8_t>(txPred & 0xFF);
+    pkt[3] = static_cast<uint8_t>((txPred >> 8) & 0xFF);
+    pkt[4] = txIdx;
+    memcpy(&pkt[5], txAdpcm, 80);
+
+    if (rawNotify(audioChar, pkt, 85)) {
+      dbgFramesSent++;
+      if (!firstAudioSent) {
+        firstAudioSent = true;
+        Serial.printf("[BLE] Single-pkt mode seq=%u MTU=%u\n", txFrameSeq, mtu);
+        displayDirty = true;
+      }
+      ++frameSeq;
+    }
+    txSubNext = TOTAL_SUB;  // keep sub-packet state idle
+    return;
+  }
+
+  // ── Sub-packet mode (MTU < 88) ─────────────────────────────────────
   if (txSubNext < TOTAL_SUB) {
     if (now - txLastSubMs >= SUB_INTERVAL_MS) {
       sendNextSubPacket();
@@ -422,12 +453,11 @@ void sendMicAudioFrame() {
     return;
   }
 
-  // No frame in flight – time for a new one?
   if (now - lastAudioTickMs < 20) return;
   lastAudioTickMs = now;
 
   encodeNewFrame();
-  sendNextSubPacket();  // send sub-packet 0 immediately
+  sendNextSubPacket();
 }
 
 // ── BLE setup ────────────────────────────────────────────────────────────
@@ -470,7 +500,7 @@ void setupBle() {
   bleServer->setCallbacks(new ServerCallbacks());
   auto* svc = bleServer->createService(SERVICE_UUID);
 
-  audioChar   = svc->createCharacteristic(AUDIO_CHAR_UUID,   NIMBLE_PROPERTY::NOTIFY, 20);
+  audioChar   = svc->createCharacteristic(AUDIO_CHAR_UUID,   NIMBLE_PROPERTY::NOTIFY, 85);
   batteryChar = svc->createCharacteristic(BATT_CHAR_UUID,    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   stateChar   = svc->createCharacteristic(STATE_CHAR_UUID,   NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   controlChar = svc->createCharacteristic(CONTROL_CHAR_UUID, NIMBLE_PROPERTY::WRITE);
@@ -492,12 +522,14 @@ void setup() {
   mc.sample_rate        = AUDIO_SAMPLE_RATE;
   mc.over_sampling      = 1;
   mc.noise_filter_level = 32;
-  mc.magnification      = mc.use_adc ? 16 : 1;
+  mc.magnification      = 16;  // both ADC and I2S PDM need amplification
   mc.dma_buf_count      = 8;
   mc.dma_buf_len        = AUDIO_SAMPLE_COUNT;
   M5.Mic.config(mc);
   M5.Speaker.end();
   micAvailable = M5.Mic.isEnabled() && M5.Mic.begin();
+  Serial.printf("[MIC] available=%d adc=%d rate=%d mag=%d\n",
+                micAvailable, mc.use_adc, mc.sample_rate, mc.magnification);
 
   M5.Display.setRotation(1);
   M5.Display.fillScreen(TFT_BLACK);

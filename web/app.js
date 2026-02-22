@@ -258,12 +258,50 @@ function handleAudioSubPacket(event) {
   const pktIdx  = byte1 & 0x0F;
   const muted   = !!(byte1 & 0x80);
 
-  // Log every sub-packet for the first 3 frames to diagnose flow
-  if (stats.subPkts <= 15) {
-    log(`Sub-pkt #${stats.subPkts}: seq=${seq} idx=${pktIdx} len=${dv.byteLength} muted=${muted}`);
+  // Log first few packets for diagnostics
+  if (stats.subPkts <= 5) {
+    log(`Pkt #${stats.subPkts}: seq=${seq} idx=${pktIdx} len=${dv.byteLength} muted=${muted}`);
   }
 
-  // If seq changed, finalize previous frame (if any) and start fresh
+  // ── Single-packet mode (85 bytes = full frame in one notification) ────
+  if (pktIdx === 0 && dv.byteLength >= 85) {
+    // Finalize any in-progress assembly from a previous sub-packet stream
+    if (assemblySeq !== null && assemblyPkts !== 0) finalizeFrame();
+    resetAssembly();
+
+    const pred  = dv.getInt16(2, true);
+    const idx   = dv.getUint8(4);
+    const adpcm = new Uint8Array(dv.buffer, dv.byteOffset + 5, 80);
+
+    if (muted) {
+      enqueue(new Int16Array(SAMPLE_COUNT));
+      stats.mutedFrames++;
+    } else {
+      const pcm = decodeAdpcm(adpcm, SAMPLE_COUNT, pred, idx);
+      lastGoodFrame = pcm;
+      enqueue(pcm);
+    }
+    stats.frames++;
+
+    if (stats.frames <= 3) {
+      log(`Frame #${stats.frames} (single-pkt): seq=${seq} pred=${pred} idx=${idx} muted=${muted}`);
+    }
+
+    // Concealment for any skipped sequences
+    if (lastCompleteSeq !== null) {
+      let gap = ((seq - lastCompleteSeq + 256) % 256) - 1;
+      if (gap > 0 && gap < 60) {
+        const conceal = Math.min(gap, MAX_CONCEAL);
+        for (let i = 0; i < conceal; i++) { enqueue(makeConceal(SAMPLE_COUNT)); stats.concealedFrames++; }
+      }
+    }
+    lastCompleteSeq = seq;
+    ensurePlayoutLoop();
+    updateStatsUi();
+    return;
+  }
+
+  // ── Sub-packet mode (≤20 bytes, 5 packets per frame) ──────────────────
   if (seq !== assemblySeq) {
     if (assemblySeq !== null && assemblyPkts !== 0) {
       // Previous frame was incomplete – finalize what we have
