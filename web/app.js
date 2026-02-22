@@ -24,7 +24,7 @@ const SAMPLE_RATE   = 8000;
 const SAMPLE_COUNT  = 160;
 const FRAME_MS      = 20;
 const SUB_PACKETS   = 5;
-const TARGET_BUFFER = 4;   // frames before playout begins
+const TARGET_BUFFER = 6;   // frames before playout begins (higher = fewer underruns)
 const MAX_BUFFER    = 24;
 const MAX_CONCEAL   = 8;
 
@@ -146,7 +146,7 @@ function playPcm(rate, int16) {
   src.buffer = buf;
   src.connect(audioCtx.destination);
   const now = audioCtx.currentTime;
-  scheduleAt = Math.max(scheduleAt, now + 0.02);
+  if (scheduleAt < now) scheduleAt = now;        // don't schedule in the past
   src.start(scheduleAt);
   scheduleAt += buf.duration;
 }
@@ -163,9 +163,8 @@ function resetAudioPipeline() {
 }
 
 function makeConceal(n) {
-  const out = new Int16Array(n);
-  if (lastGoodFrame?.length === n) { for (let i = 0; i < n; i++) out[i] = (lastGoodFrame[i] * 7) >> 3; }
-  return out;
+  // Return silence — repeating the last frame creates an audible buzz
+  return new Int16Array(n);
 }
 
 function enqueue(frame) {
@@ -181,11 +180,19 @@ function ensurePlayoutLoop() {
     if (!playoutStarted) {
       if (jitterQueue.length < TARGET_BUFFER) return;
       playoutStarted = true;
-      scheduleAt = Math.max(scheduleAt, audioCtx.currentTime + 0.04);
+      scheduleAt = audioCtx.currentTime + 0.08;  // 80ms lead-in
     }
-    let frame = jitterQueue.shift();
-    if (!frame) { frame = makeConceal(SAMPLE_COUNT); stats.concealedFrames++; }
-    playPcm(SAMPLE_RATE, frame);
+    // Only consume when scheduled audio is about to run out (< 60ms ahead)
+    const ahead = scheduleAt - audioCtx.currentTime;
+    if (ahead > 0.06) return;                    // plenty buffered in Web Audio
+    // Drain up to 2 frames per tick to catch up if needed
+    const drain = Math.min(2, jitterQueue.length || 1);
+    for (let d = 0; d < drain; d++) {
+      let frame = jitterQueue.shift();
+      if (!frame) { frame = makeConceal(SAMPLE_COUNT); stats.concealedFrames++; }
+      else { lastGoodFrame = frame; }
+      playPcm(SAMPLE_RATE, frame);
+    }
     updateStatsUi();
   }, FRAME_MS);
 }

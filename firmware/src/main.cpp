@@ -524,7 +524,7 @@ void setup() {
   mc.sample_rate        = AUDIO_SAMPLE_RATE;
   mc.over_sampling      = 1;
   mc.noise_filter_level = 32;
-  mc.magnification      = 16;  // both ADC and I2S PDM need amplification
+  mc.magnification      = 8;   // 16 clips on SPM1423 PDM; 8 gives good level
   mc.dma_buf_count      = 8;
   mc.dma_buf_len        = AUDIO_SAMPLE_COUNT;
   M5.Mic.config(mc);
