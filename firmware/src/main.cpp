@@ -500,7 +500,9 @@ void setupBle() {
   bleServer->setCallbacks(new ServerCallbacks());
   auto* svc = bleServer->createService(SERVICE_UUID);
 
-  audioChar   = svc->createCharacteristic(AUDIO_CHAR_UUID,   NIMBLE_PROPERTY::NOTIFY, 85);
+  // max_len=20 keeps the GATT attribute table compact for service discovery.
+  // rawNotify() bypasses max_len and can send up to MTU-3 bytes directly.
+  audioChar   = svc->createCharacteristic(AUDIO_CHAR_UUID,   NIMBLE_PROPERTY::NOTIFY, 20);
   batteryChar = svc->createCharacteristic(BATT_CHAR_UUID,    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   stateChar   = svc->createCharacteristic(STATE_CHAR_UUID,   NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   controlChar = svc->createCharacteristic(CONTROL_CHAR_UUID, NIMBLE_PROPERTY::WRITE);
