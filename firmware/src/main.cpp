@@ -35,6 +35,8 @@
 // The header (host/ble_hs_id.h) isn't on the NimBLE-Arduino 1.4.x include
 // path, but the symbol is compiled into the library.
 extern "C" int ble_hs_id_set_rnd(const uint8_t *rnd_addr);
+extern "C" int ble_gap_update_params(uint16_t conn_handle,
+                                      const struct ble_gap_upd_params *params);
 
 // ── UUIDs ────────────────────────────────────────────────────────────────
 static const char* DEVICE_NAME       = "TossTalk";
@@ -72,6 +74,7 @@ bool     bleClientConnected = false;
 uint32_t bleConnectedAtMs   = 0;
 uint16_t bleConnHandle      = 0xFFFF;
 bool     firstAudioSent     = false;
+bool     connParamsUpdated  = false;
 bool     micAvailable       = false;
 volatile bool displayDirty  = false;  // set in BLE callbacks, drawn in loop()
 
@@ -135,11 +138,11 @@ bool rawNotify(NimBLECharacteristic* chr, const uint8_t* data, size_t len) {
   if (bleConnHandle == 0xFFFF) return false;
   struct os_mbuf* om = ble_hs_mbuf_from_flat(data, static_cast<uint16_t>(len));
   if (!om) {
-    // mbuf pool exhausted — every pending TX holds an mbuf.  We MUST wait
-    // for the controller to transmit them and return mbufs to the pool.
+    // mbuf pool exhausted — yield so NimBLE host task can process
+    // TX completions and return mbufs to the pool.
     dbgNotifyFail++;
     dbgMbufFail++;
-    delay(8);   // let BLE controller drain a connection event
+    delay(2);
     return false;
   }
   int rc = ble_gattc_notify_custom(bleConnHandle, chr->getHandle(), om);
@@ -200,6 +203,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedAtMs   = 0;
     bleConnHandle      = 0xFFFF;
     firstAudioSent     = false;
+    connParamsUpdated  = false;
     displayDirty       = true;
     Serial.println("[BLE] Disconnected");
     // Restart advertising so the device is discoverable again.
@@ -426,7 +430,9 @@ void sendMicAudioFrame() {
   // Send the entire 80-byte ADPCM frame + 5-byte header in one notification.
   // This is 5× fewer mbufs and vastly more reliable than sub-packets.
   if (mtu >= 88) {
-    if (now - lastAudioTickMs < 20) return;
+    // signed comparison: if lastAudioTickMs is in the future (from skip),
+    // (now - future) wraps negative, which is < 20 → correctly blocks.
+    if (static_cast<int32_t>(now - lastAudioTickMs) < 20) return;
     lastAudioTickMs = now;
 
     encodeNewFrame();
@@ -578,6 +584,19 @@ void loop() {
   if (settling) {
     delay(10);
     return;
+  }
+
+  // Request shorter connection interval once after settling.
+  // Chrome/Edge default to ~30ms; 15ms doubles our TX throughput.
+  if (bleClientConnected && !connParamsUpdated) {
+    connParamsUpdated = true;
+    struct ble_gap_upd_params params = {};
+    params.itvl_min = 12;             // 15.0 ms  (units of 1.25 ms)
+    params.itvl_max = 16;             // 20.0 ms
+    params.latency  = 0;
+    params.supervision_timeout = 400; // 4 s
+    int rc = ble_gap_update_params(bleConnHandle, &params);
+    Serial.printf("[BLE] Conn param update request: rc=%d\n", rc);
   }
 
   const bool streaming = bleClientConnected && firstAudioSent;
