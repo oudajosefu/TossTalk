@@ -43,6 +43,8 @@ on('connection', (state) => {
     connectBtn.textContent = 'Connect Microphone';
     connectBtn.classList.remove('connected');
     volumeCard.style.display = 'none';
+    gateStateEl.textContent = '—';
+    batteryEl.textContent = '—';
     if (state === 'Connect failed') statusDot.classList.add('error');
   } else {
     // Connecting / settling / discovery
@@ -106,7 +108,7 @@ flashBtn.addEventListener('click', async () => {
   flashBtn.disabled = true;
   flashProgress.value = 0;
   try {
-    await flashFirmware({ firmwareUrl: DEFAULT_FW_URL });
+    await flashFirmware({ firmwareUrl: DEFAULT_FW_URL, eraseAll: true });
   } catch {}
   flashBtn.disabled = false;
 });

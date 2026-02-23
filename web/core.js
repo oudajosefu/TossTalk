@@ -47,6 +47,7 @@ let lastGoodFrame = null;
 let lastAudioAt = 0;
 let noAudioTimer = null;
 let esptoolMod = null;
+let lastGateName = '';
 const jitterQueue = [];
 
 // Sub-packet reassembly
@@ -200,6 +201,11 @@ function finalizeFrame() {
     lastGoodFrame = pcm;
     enqueue(pcm);
   }
+  // Correct gate display if in-band muted flag disagrees with last BLE state
+  if (!assemblyMuted && lastGateName && lastGateName !== 'UnmutedLive') {
+    lastGateName = 'UnmutedLive';
+    emit('gate', 'UnmutedLive');
+  }
   stats.frames++;
   if (lastCompleteSeq !== null) {
     let gap = ((assemblySeq - lastCompleteSeq + 256) % 256) - 1;
@@ -241,6 +247,11 @@ function handleAudioSubPacket(event) {
 
     if (muted) { enqueue(new Int16Array(SAMPLE_COUNT)); stats.mutedFrames++; }
     else { const pcm = decodeAdpcm(adpcm, SAMPLE_COUNT, pred, idx); lastGoodFrame = pcm; enqueue(pcm); }
+    // Correct gate display if in-band muted flag disagrees with last BLE state
+    if (!muted && lastGateName && lastGateName !== 'UnmutedLive') {
+      lastGateName = 'UnmutedLive';
+      emit('gate', 'UnmutedLive');
+    }
     stats.frames++;
     if (stats.frames <= 3) emit('log', `Frame #${stats.frames} (single-pkt): seq=${seq} pred=${pred} idx=${idx} muted=${muted}`);
     ensurePlayoutLoop();
@@ -287,6 +298,7 @@ function handleState(event) {
   const dv = event.target.value;
   if (!dv || dv.byteLength < 1) return;
   const name = GATE_NAMES[dv.getUint8(0)] || `Unknown(${dv.getUint8(0)})`;
+  lastGateName = name;
   emit('gate', name);
 }
 
@@ -313,6 +325,7 @@ export async function connectBle() {
       device.addEventListener('gattserverdisconnected', () => {
         emit('connection', 'Disconnected');
         emit('log', 'BLE disconnected');
+        lastGateName = '';
         resetAudioPipeline();
         clearNoAudioMonitor();
         if (!isConnecting) scheduleReconnect();
