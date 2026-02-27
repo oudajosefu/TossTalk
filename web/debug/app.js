@@ -71,4 +71,4 @@ function parseAddr(v) {
 }
 
 updateStatsUi();
-if (!firmwareUrlIn.value.trim()) firmwareUrlIn.value = DEFAULT_FW_URL;
+firmwareUrlIn.value = DEFAULT_FW_URL;
