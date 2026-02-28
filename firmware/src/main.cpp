@@ -94,7 +94,7 @@ static constexpr uint32_t HEAVY_IO_INTERVAL_MS = 500;  // IMU+battery+display at
 
 // How long after connect to avoid ALL non-BLE work so the NimBLE stack
 // can handle service discovery on single-core ESP32 unimpeded.
-static constexpr uint32_t BLE_SETTLING_MS = 5000;
+static constexpr uint32_t BLE_SETTLING_MS = 3500;
 
 // ── Audio capture ────────────────────────────────────────────────────────
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
@@ -132,7 +132,7 @@ void drawRuntimeStatus();
 
 // ── Notification warmup guard ────────────────────────────────────────────
 bool canNotify() {
-  return bleClientConnected && (millis() - bleConnectedAtMs >= 2500);
+  return bleClientConnected && (millis() - bleConnectedAtMs >= 1500);
 }
 
 // ── Raw NimBLE C-API notification ────────────────────────────────────────

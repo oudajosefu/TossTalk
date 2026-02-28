@@ -11,9 +11,9 @@ const STATE_CHAR_UUID = '9f8d0004-6b7b-4f26-b10f-3aa861aa0001';
 const SAMPLE_RATE   = 8000;
 const SAMPLE_COUNT  = 160;
 const FRAME_MS      = 20;
-const TARGET_BUFFER = 3;
+const TARGET_BUFFER = 2;
 const MAX_BUFFER    = 24;
-const MAX_CONCEAL   = 3;
+const MAX_CONCEAL   = 2;
 
 // ── ADPCM tables ─────────────────────────────────────────────────────────
 const INDEX_TABLE = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8];
@@ -154,6 +154,14 @@ function ensurePlayoutLoop() {
       if (jitterQueue.length < TARGET_BUFFER) return;
       playoutStarted = true;
       scheduleAt = audioCtx.currentTime;
+    }
+    // Drift correction: if buffer is growing, consume an extra frame to
+    // prevent latency from creeping up.  This drops 1 frame (~20ms) when
+    // the buffer exceeds TARGET_BUFFER + 3, keeping steady-state latency
+    // close to the target.
+    if (jitterQueue.length > TARGET_BUFFER + 3) {
+      jitterQueue.shift();  // discard oldest frame
+      stats.drops++;
     }
     let frame = jitterQueue.shift();
     if (!frame) { frame = makeConceal(SAMPLE_COUNT); stats.concealedFrames++; }
