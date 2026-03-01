@@ -1,6 +1,6 @@
 # Observability (Internal Only)
 
-No teacher-facing diagnostics are required.
+No end-user-facing diagnostics are required.
 
 Log events for engineering:
 
@@ -9,4 +9,4 @@ Log events for engineering:
 - Battery level trend and low-battery transitions
 - BLE packet counters (sent/dropped)
 
-Keep retention short and avoid storing identifiable classroom data.
+Keep retention short and avoid storing identifiable session data.

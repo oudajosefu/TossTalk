@@ -27,7 +27,7 @@
 - Continuous audio notify pipeline active
 - Browser playback of BLE frames
 - Acceptance:
-  - Intelligible speech in classroom test loop
+  - Intelligible speech in real-world test loop
   - Fast recovery to talk path after toss events
 
 ## M4 - Reliability hardening
@@ -35,4 +35,4 @@
 - Threshold tuning, reconnect resilience, logging
 - Acceptance:
   - Agreed talk-availability target reached
-  - No teacher intervention required during test sessions
+  - No user intervention required during test sessions

@@ -1,4 +1,4 @@
-// TossTalk – throwable classroom microphone firmware
+// TossTalk – throwable wireless microphone firmware
 // Target: M5StickC Plus2 (ESP32-PICO-V3-02)
 //
 // Architecture v2 – small-packet streaming

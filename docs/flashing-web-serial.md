@@ -4,7 +4,7 @@ Target: desktop Chromium browsers.
 
 ## Goal
 
-Teachers should flash firmware from a web page without installing Arduino IDE/PlatformIO.
+Users should be able to flash firmware from a web page without installing Arduino IDE/PlatformIO.
 
 ## Status
 

@@ -1,28 +1,28 @@
 # TossTalk
 
-TossTalk is a throwable classroom microphone prototype built for the M5StickC Plus2.
+TossTalk is a tossable wireless microphone built on the M5StickC Plus2.
 
-The goal is simple: teachers can turn it on, pair once, and use it like a pass-around classroom mic without extra setup.
+The goal is simple: power it on, pair once, and use it as a pass-around mic — in classrooms, meetings, events, or anywhere a group needs to share a microphone without cables.
 
 ## What it does
 
 - Detects when the device is in the air and mutes throw noise
-- Recovers quickly so students can speak right away after a catch
+- Recovers quickly so the next speaker can talk right after catching it
 - Streams audio to a web app over BLE
-- Plays audio through the teacher's connected speakers
+- Plays audio through connected speakers
 - Shows remaining battery on the device screen
 - Supports browser-based firmware updates (no Arduino IDE required)
 
-## Teacher workflow
+## Quick start
 
 1. Power on TossTalk
 2. Open the TossTalk web page in Chrome or Edge (desktop)
-3. Connect device
-4. Start class and pass/throw the mic
+3. Connect the device
+4. Pass or toss the mic to whoever needs to speak
 
-No in-class troubleshooting UI is required for normal use; recovery is automatic.
+No troubleshooting is required during normal use; recovery is automatic.
 
-## Firmware updates (teacher-friendly path)
+## Firmware updates (easy path)
 
 The web app includes a Flash Firmware button that uses Web Serial in Chromium browsers.
 

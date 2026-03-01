@@ -1,5 +1,5 @@
 // TossTalk – shared BLE + audio + flashing core
-// Both the teacher UI and the debug console import this module.
+// Both the main UI and the debug console import this module.
 
 // ── BLE UUIDs ────────────────────────────────────────────────────────────
 const SERVICE_UUID    = '9f8d0001-6b7b-4f26-b10f-3aa861aa0001';

@@ -29,5 +29,5 @@ Transitions are IMU-driven and biased toward fast talk recovery.
 ## Reliability posture
 
 - Prioritize speech availability over perfect throw-noise suppression.
-- Ambiguous motion should auto-recover; no teacher action needed.
+- Ambiguous motion should auto-recover; no user action needed.
 - Internal logs only for tuning/debug.

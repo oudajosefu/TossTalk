@@ -1,4 +1,4 @@
-// TossTalk – teacher-friendly UI
+// TossTalk – main UI
 import { connectBle, flashFirmware, on, stats, DEFAULT_FW_URL } from './core.js';
 
 // ── DOM refs ─────────────────────────────────────────────────────────────
