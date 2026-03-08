@@ -39,7 +39,6 @@ let audioCtx;
 let scheduleAt = 0;
 let bleDevice = null;
 let reconnectTimer = null;
-let disconnectBound = false;
 let isConnecting = false;
 let jitterTimer = null;
 let playoutStarted = false;
@@ -49,6 +48,11 @@ let noAudioTimer = null;
 let esptoolMod = null;
 let lastGateName = '';
 const jitterQueue = [];
+
+// Track characteristic references so we can remove listeners on disconnect
+let activeAudioChar = null;
+let activeBattChar = null;
+let activeStateChar = null;
 
 // Sub-packet reassembly
 let assemblySeq = null, assemblyPkts = 0, assemblyAdpcm = null;
@@ -126,6 +130,9 @@ function playPcm(rate, int16) {
 }
 
 function resetAudioPipeline() {
+  // Stop the playout timer — a stale timer with an old scheduleAt
+  // will either underrun continuously or block real audio.
+  if (jitterTimer) { clearInterval(jitterTimer); jitterTimer = null; }
   jitterQueue.length = 0;
   playoutStarted = false;
   lastGoodFrame = null;
@@ -133,6 +140,9 @@ function resetAudioPipeline() {
   assemblyPkts = 0;
   assemblyAdpcm = null;
   lastCompleteSeq = null;
+  // Reset stats for clean session
+  stats.frames = 0; stats.drops = 0; stats.mutedFrames = 0;
+  stats.concealedFrames = 0; stats.subPkts = 0;
   emit('stats');
 }
 
@@ -147,43 +157,48 @@ function enqueue(frame) {
 function ensurePlayoutLoop() {
   if (jitterTimer) return;
   jitterTimer = setInterval(() => {
-    ensureAudio();
-    if (!playoutStarted) {
-      if (jitterQueue.length < TARGET_BUFFER) return;
-      playoutStarted = true;
-      scheduleAt = audioCtx.currentTime;
+    try {
+      ensureAudio();
+      if (!playoutStarted) {
+        if (jitterQueue.length < TARGET_BUFFER) return;
+        playoutStarted = true;
+        scheduleAt = audioCtx.currentTime;
+      }
+
+      const now = audioCtx.currentTime;
+
+      // If the scheduled audio has already played out (underrun), snap
+      // forward.  This accepts a brief silence gap rather than filling
+      // the look-ahead with concealment frames — concealment pushes
+      // scheduleAt into the future, which delays real frames when they
+      // arrive and causes the buffer to grow, triggering drift drops
+      // that lose syllables.
+      if (scheduleAt < now) scheduleAt = now;
+
+      // Gradual drift correction: shed at most 1 excess frame per tick.
+      // The higher ceiling (8 frames / 160 ms) absorbs BLE bursts that
+      // a tighter threshold would discard.
+      if (jitterQueue.length > TARGET_BUFFER + 4) {
+        jitterQueue.shift();
+        stats.drops++;
+      }
+
+      // Clock-driven consumption: schedule only real frames from the
+      // queue until the look-ahead horizon.  Never fill with concealment
+      // — that inflates latency and triggers the drop cascade above.
+      const LEAD_S = 0.12;  // 120 ms look-ahead (6 frames)
+      while (jitterQueue.length > 0 && scheduleAt < now + LEAD_S) {
+        const frame = jitterQueue.shift();
+        lastGoodFrame = frame;
+        playPcm(SAMPLE_RATE, frame);
+        emit('audio', frame);
+      }
+
+      emit('stats');
+    } catch (e) {
+      // Don't let a single error kill the playout loop
+      emit('log', `Playout error: ${formatError(e)}`);
     }
-
-    const now = audioCtx.currentTime;
-
-    // If the scheduled audio has already played out (underrun), snap
-    // forward.  This accepts a brief silence gap rather than filling
-    // the look-ahead with concealment frames — concealment pushes
-    // scheduleAt into the future, which delays real frames when they
-    // arrive and causes the buffer to grow, triggering drift drops
-    // that lose syllables.
-    if (scheduleAt < now) scheduleAt = now;
-
-    // Gradual drift correction: shed at most 1 excess frame per tick.
-    // The higher ceiling (8 frames / 160 ms) absorbs BLE bursts that
-    // a tighter threshold would discard.
-    if (jitterQueue.length > TARGET_BUFFER + 4) {
-      jitterQueue.shift();
-      stats.drops++;
-    }
-
-    // Clock-driven consumption: schedule only real frames from the
-    // queue until the look-ahead horizon.  Never fill with concealment
-    // — that inflates latency and triggers the drop cascade above.
-    const LEAD_S = 0.12;  // 120 ms look-ahead (6 frames)
-    while (jitterQueue.length > 0 && scheduleAt < now + LEAD_S) {
-      const frame = jitterQueue.shift();
-      lastGoodFrame = frame;
-      playPcm(SAMPLE_RATE, frame);
-      emit('audio', frame);
-    }
-
-    emit('stats');
   }, 10);
 }
 
@@ -343,24 +358,26 @@ export async function connectBle() {
     }
 
     emit('connection', 'Selecting device...');
-    const device = bleDevice || (await withTimeout(
+    // Always show the device picker — on reboot the device has a new
+    // random MAC, so the cached bleDevice is stale.
+    const device = await withTimeout(
       navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }], optionalServices: [SERVICE_UUID] }),
       30000, 'Device picker'
-    ));
+    );
+
+    // Remove listeners from previous device to avoid zombie handlers
+    cleanupBle();
     bleDevice = device;
 
-    if (!disconnectBound) {
-      device.addEventListener('gattserverdisconnected', () => {
-        emit('connection', 'Disconnected');
-        emit('log', 'BLE disconnected');
-        lastGateName = '';
-        smoothBatt = -1;
-        resetAudioPipeline();
-        clearNoAudioMonitor();
-        if (!isConnecting) scheduleReconnect();
-      });
-      disconnectBound = true;
-    }
+    device.addEventListener('gattserverdisconnected', () => {
+      emit('connection', 'Disconnected');
+      emit('log', 'BLE disconnected');
+      lastGateName = '';
+      smoothBatt = -1;
+      cleanupCharListeners();
+      resetAudioPipeline();
+      clearNoAudioMonitor();
+    });
 
     let service = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -416,6 +433,10 @@ export async function connectBle() {
     await withTimeout(audioChar.startNotifications(), 12000, 'Audio notif');
     emit('log', 'Audio notifications on');
 
+    // Store refs so we can remove listeners on disconnect
+    activeAudioChar = audioChar;
+    activeBattChar = battChar;
+    activeStateChar = stateChar;
     audioChar.addEventListener('characteristicvaluechanged', handleAudioSubPacket);
     battChar.addEventListener('characteristicvaluechanged', handleBattery);
     stateChar.addEventListener('characteristicvaluechanged', handleState);
@@ -437,13 +458,24 @@ export async function connectBle() {
 }
 
 function clearReconnect() { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
-function scheduleReconnect() {
-  if (!bleDevice || reconnectTimer) return;
-  reconnectTimer = setTimeout(async () => {
-    reconnectTimer = null;
-    try { emit('connection', 'Reconnecting...'); await connectBle(); }
-    catch { scheduleReconnect(); }
-  }, 1500);
+
+// Remove event listeners from characteristics to prevent duplicate handlers
+function cleanupCharListeners() {
+  if (activeAudioChar) { try { activeAudioChar.removeEventListener('characteristicvaluechanged', handleAudioSubPacket); } catch {} activeAudioChar = null; }
+  if (activeBattChar) { try { activeBattChar.removeEventListener('characteristicvaluechanged', handleBattery); } catch {} activeBattChar = null; }
+  if (activeStateChar) { try { activeStateChar.removeEventListener('characteristicvaluechanged', handleState); } catch {} activeStateChar = null; }
+}
+
+// Full cleanup of BLE state — called before connecting to a new device
+function cleanupBle() {
+  clearReconnect();
+  cleanupCharListeners();
+  if (bleDevice) {
+    try { bleDevice.gatt.disconnect(); } catch {}
+    bleDevice = null;
+  }
+  resetAudioPipeline();
+  clearNoAudioMonitor();
 }
 
 // ── Flashing ─────────────────────────────────────────────────────────────
