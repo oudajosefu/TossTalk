@@ -103,9 +103,10 @@ function startNoAudioMonitor() {
   clearNoAudioMonitor();
   lastAudioAt = Date.now();
   noAudioTimer = setInterval(() => {
-    if (Date.now() - lastAudioAt > 6000) {
-      emit('log', `No audio sub-packets for 6 s (${stats.subPkts} total). Check device.`);
-      lastAudioAt = Date.now();
+    const silence = Date.now() - lastAudioAt;
+    if (silence > 4000) {
+      emit('log', `No audio for ${Math.round(silence / 1000)}s (${stats.subPkts} sub-pkts). Check device.`);
+      emit('connection', 'No audio \u2014 reconnect');
     }
   }, 2000);
 }
@@ -114,19 +115,6 @@ function startNoAudioMonitor() {
 function ensureAudio() {
   if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 48000 });
   if (audioCtx.state === 'suspended') audioCtx.resume();
-}
-
-function playPcm(rate, int16) {
-  const f = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) f[i] = int16[i] / 32768;
-  const buf = audioCtx.createBuffer(1, f.length, rate);
-  buf.copyToChannel(f, 0);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  src.onended = () => { try { src.disconnect(); } catch {} };
-  src.start(scheduleAt);
-  scheduleAt += buf.duration;
 }
 
 function resetAudioPipeline() {
@@ -140,6 +128,11 @@ function resetAudioPipeline() {
   assemblyPkts = 0;
   assemblyAdpcm = null;
   lastCompleteSeq = null;
+  // Close AudioContext to release all accumulated AudioNodes.
+  // A fresh context on reconnect prevents the slow node leak that
+  // eventually exhausts Chrome's per-context limits.
+  if (audioCtx) { try { audioCtx.close(); } catch {} audioCtx = null; }
+  scheduleAt = 0;
   // Reset stats for clean session
   stats.frames = 0; stats.drops = 0; stats.mutedFrames = 0;
   stats.concealedFrames = 0; stats.subPkts = 0;
@@ -166,40 +159,52 @@ function ensurePlayoutLoop() {
       }
 
       const now = audioCtx.currentTime;
-
-      // If the scheduled audio has already played out (underrun), snap
-      // forward.  This accepts a brief silence gap rather than filling
-      // the look-ahead with concealment frames — concealment pushes
-      // scheduleAt into the future, which delays real frames when they
-      // arrive and causes the buffer to grow, triggering drift drops
-      // that lose syllables.
       if (scheduleAt < now) scheduleAt = now;
 
       // Gradual drift correction: shed at most 1 excess frame per tick.
-      // The higher ceiling (8 frames / 160 ms) absorbs BLE bursts that
-      // a tighter threshold would discard.
       if (jitterQueue.length > TARGET_BUFFER + 4) {
         jitterQueue.shift();
         stats.drops++;
       }
 
-      // Clock-driven consumption: schedule only real frames from the
-      // queue until the look-ahead horizon.  Never fill with concealment
-      // — that inflates latency and triggers the drop cascade above.
-      const LEAD_S = 0.12;  // 120 ms look-ahead (6 frames)
-      while (jitterQueue.length > 0 && scheduleAt < now + LEAD_S) {
-        const frame = jitterQueue.shift();
-        lastGoodFrame = frame;
-        playPcm(SAMPLE_RATE, frame);
-        emit('audio', frame);
+      // Collect frames that fit in the look-ahead window and merge them
+      // into ONE AudioBuffer + ONE BufferSourceNode.  The old code
+      // created a separate node per 20 ms frame (~50 nodes/sec).  After
+      // 3-5 minutes Chrome's per-context node count hit ~10 000 and
+      // createBufferSource() started throwing, silently killing audio.
+      const LEAD_S = 0.12;
+      const FRAME_DUR = SAMPLE_COUNT / SAMPLE_RATE;  // 0.02 s
+      const batch = [];
+      let batchEnd = scheduleAt;
+      while (jitterQueue.length > 0 && batchEnd < now + LEAD_S) {
+        batch.push(jitterQueue.shift());
+        batchEnd += FRAME_DUR;
+      }
+
+      if (batch.length > 0) {
+        const totalSamples = batch.length * SAMPLE_COUNT;
+        const merged = new Float32Array(totalSamples);
+        let off = 0;
+        for (const frame of batch) {
+          for (let i = 0; i < frame.length; i++) merged[off++] = frame[i] / 32768;
+        }
+        const buf = audioCtx.createBuffer(1, totalSamples, SAMPLE_RATE);
+        buf.copyToChannel(merged, 0);
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        src.onended = () => { try { src.disconnect(); } catch {} };
+        src.start(scheduleAt);
+        scheduleAt += buf.duration;
+        lastGoodFrame = batch[batch.length - 1];
+        for (const frame of batch) emit('audio', frame);
       }
 
       emit('stats');
     } catch (e) {
-      // Don't let a single error kill the playout loop
       emit('log', `Playout error: ${formatError(e)}`);
     }
-  }, 10);
+  }, 50);
 }
 
 // ── IMA ADPCM decoder ───────────────────────────────────────────────────

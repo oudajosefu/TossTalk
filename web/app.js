@@ -19,6 +19,7 @@ const flashStatus  = document.getElementById('flashStatus');
 const CIRC = 2 * Math.PI * 65;            // circumference of the SVG circle
 let smoothLevel = 0;                       // smoothed 0-1 level
 let connected = false;
+let lastAudioEventMs = 0;                  // for volume decay
 
 // ── Friendly gate names ──────────────────────────────────────────────────
 const FRIENDLY_GATE = {
@@ -46,6 +47,11 @@ on('connection', (state) => {
     gateStateEl.textContent = '—';
     batteryEl.textContent = '—';
     if (state === 'Connect failed') statusDot.classList.add('error');
+  } else if (state.startsWith('No audio')) {
+    // BLE may have silently dropped — show a clear error state
+    statusDot.classList.add('error');
+    connectBtn.textContent = 'Reconnect';
+    connectBtn.classList.remove('connected');
   } else {
     // Connecting / settling / discovery
     statusDot.classList.add('connecting');
@@ -68,6 +74,7 @@ on('gate', (name) => {
 });
 
 on('audio', (pcm) => {
+  lastAudioEventMs = Date.now();
   // RMS level from 160-sample PCM frame
   let sum = 0;
   for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
@@ -98,6 +105,22 @@ on('audio', (pcm) => {
 
 on('flashProgress', (pct) => { flashProgress.value = pct; });
 on('flashStatus', (msg) => { flashStatus.textContent = msg; });
+
+// ── Volume decay ─────────────────────────────────────────────────────────
+// When audio stops arriving the meter should decay to zero instead of
+// freezing at the last displayed level.  This makes silence visible.
+setInterval(() => {
+  if (Date.now() - lastAudioEventMs > 400 && smoothLevel > 0.005) {
+    smoothLevel *= 0.55;
+    if (smoothLevel < 0.005) smoothLevel = 0;
+    const offset = CIRC * (1 - smoothLevel);
+    volBar.style.strokeDashoffset = offset;
+    volBar.classList.remove('good', 'warm', 'hot');
+    volBar.classList.add('quiet');
+    volIcon.textContent = '🔇';
+    volDesc.textContent = 'Silence';
+  }
+}, 200);
 
 // ── Button handlers ──────────────────────────────────────────────────────
 connectBtn.addEventListener('click', () => {

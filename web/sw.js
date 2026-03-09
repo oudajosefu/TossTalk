@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tosstalk-v18';
+const CACHE_NAME = 'tosstalk-v19';
 const ASSETS = [
   './',
   './index.html',
