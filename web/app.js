@@ -47,7 +47,7 @@ on('connection', (state) => {
     gateStateEl.textContent = '—';
     batteryEl.textContent = '—';
     if (state === 'Connect failed') statusDot.classList.add('error');
-  } else if (state.startsWith('No audio')) {
+  } else if (state.startsWith('No audio') || state.startsWith('Playback fault') || state.startsWith('Audio stream error')) {
     // BLE may have silently dropped — show a clear error state
     statusDot.classList.add('error');
     connectBtn.textContent = 'Reconnect';
@@ -121,6 +121,22 @@ setInterval(() => {
     volDesc.textContent = 'Silence';
   }
 }, 200);
+
+// ── Global error visibility ─────────────────────────────────────────────
+// Prevent silent UI freezes: show a visible fault state for uncaught errors.
+window.addEventListener('error', () => {
+  connStateEl.textContent = 'UI error — refresh page';
+  statusDot.className = 'status-dot error';
+  connectBtn.textContent = 'Refresh';
+  connectBtn.classList.remove('connected');
+});
+
+window.addEventListener('unhandledrejection', () => {
+  connStateEl.textContent = 'UI error — refresh page';
+  statusDot.className = 'status-dot error';
+  connectBtn.textContent = 'Refresh';
+  connectBtn.classList.remove('connected');
+});
 
 // ── Button handlers ──────────────────────────────────────────────────────
 connectBtn.addEventListener('click', () => {

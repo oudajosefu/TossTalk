@@ -47,6 +47,8 @@ let lastAudioAt = 0;
 let noAudioTimer = null;
 let esptoolMod = null;
 let lastGateName = '';
+let playoutErrStreak = 0;
+let malformedPktCount = 0;
 const jitterQueue = [];
 
 // Track characteristic references so we can remove listeners on disconnect
@@ -114,7 +116,7 @@ function startNoAudioMonitor() {
 // ── Audio engine ─────────────────────────────────────────────────────────
 function ensureAudio() {
   if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 48000 });
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
 }
 
 function resetAudioPipeline() {
@@ -133,6 +135,8 @@ function resetAudioPipeline() {
   // eventually exhausts Chrome's per-context limits.
   if (audioCtx) { try { audioCtx.close(); } catch {} audioCtx = null; }
   scheduleAt = 0;
+  playoutErrStreak = 0;
+  malformedPktCount = 0;
   // Reset stats for clean session
   stats.frames = 0; stats.drops = 0; stats.mutedFrames = 0;
   stats.concealedFrames = 0; stats.subPkts = 0;
@@ -160,6 +164,17 @@ function ensurePlayoutLoop() {
 
       const now = audioCtx.currentTime;
       if (scheduleAt < now) scheduleAt = now;
+
+      // If scheduleAt drifts far ahead, user hears heavy delay.
+      // Clamp latency and shed backlog to recover quickly.
+      if (scheduleAt > now + 0.6) {
+        emit('log', 'Playout backlog exceeded 600ms; trimming latency');
+        scheduleAt = now + 0.12;
+        while (jitterQueue.length > TARGET_BUFFER + 2) {
+          jitterQueue.shift();
+          stats.drops++;
+        }
+      }
 
       // Gradual drift correction: shed at most 1 excess frame per tick.
       if (jitterQueue.length > TARGET_BUFFER + 4) {
@@ -200,9 +215,15 @@ function ensurePlayoutLoop() {
         for (const frame of batch) emit('audio', frame);
       }
 
+      playoutErrStreak = 0;
+
       emit('stats');
     } catch (e) {
       emit('log', `Playout error: ${formatError(e)}`);
+      playoutErrStreak++;
+      if (playoutErrStreak >= 3) {
+        emit('connection', 'Playback fault — reconnect');
+      }
     }
   }, 50);
 }
@@ -262,70 +283,78 @@ function finalizeFrame() {
 }
 
 function handleAudioSubPacket(event) {
-  const dv = event.target.value;
-  if (!dv || dv.byteLength < 2) return;
-  lastAudioAt = Date.now();
-  stats.subPkts++;
+  try {
+    const dv = event.target.value;
+    if (!dv || dv.byteLength < 2) return;
+    lastAudioAt = Date.now();
+    stats.subPkts++;
 
-  const seq = dv.getUint8(0), byte1 = dv.getUint8(1);
-  const pktIdx = byte1 & 0x0F, muted = !!(byte1 & 0x80);
+    const seq = dv.getUint8(0), byte1 = dv.getUint8(1);
+    const pktIdx = byte1 & 0x0F, muted = !!(byte1 & 0x80);
 
-  if (stats.subPkts <= 5) emit('log', `Pkt #${stats.subPkts}: seq=${seq} idx=${pktIdx} len=${dv.byteLength} muted=${muted}`);
+    if (stats.subPkts <= 5) emit('log', `Pkt #${stats.subPkts}: seq=${seq} idx=${pktIdx} len=${dv.byteLength} muted=${muted}`);
 
-  // Single-packet mode
-  if (pktIdx === 0 && dv.byteLength >= 85) {
-    if (assemblySeq !== null && assemblyPkts !== 0) finalizeFrame();
-    resetAssembly();
-    const pred = dv.getInt16(2, true), idx = dv.getUint8(4);
-    const adpcm = new Uint8Array(dv.buffer, dv.byteOffset + 5, 80);
+    // Single-packet mode
+    if (pktIdx === 0 && dv.byteLength >= 85) {
+      if (assemblySeq !== null && assemblyPkts !== 0) finalizeFrame();
+      resetAssembly();
+      const pred = dv.getInt16(2, true), idx = dv.getUint8(4);
+      const adpcm = new Uint8Array(dv.buffer, dv.byteOffset + 5, 80);
 
-    if (lastCompleteSeq !== null) {
-      let gap = ((seq - lastCompleteSeq + 256) % 256) - 1;
-      if (gap > 0 && gap < 60) {
-        const conceal = Math.min(gap, MAX_CONCEAL);
-        for (let i = 0; i < conceal; i++) { enqueue(makeConceal(SAMPLE_COUNT)); stats.concealedFrames++; }
+      if (lastCompleteSeq !== null) {
+        let gap = ((seq - lastCompleteSeq + 256) % 256) - 1;
+        if (gap > 0 && gap < 60) {
+          const conceal = Math.min(gap, MAX_CONCEAL);
+          for (let i = 0; i < conceal; i++) { enqueue(makeConceal(SAMPLE_COUNT)); stats.concealedFrames++; }
+        }
       }
-    }
-    lastCompleteSeq = seq;
+      lastCompleteSeq = seq;
 
-    if (muted) { enqueue(new Int16Array(SAMPLE_COUNT)); stats.mutedFrames++; }
-    else { const pcm = decodeAdpcm(adpcm, SAMPLE_COUNT, pred, idx); lastGoodFrame = pcm; enqueue(pcm); }
-    // Correct gate display if in-band muted flag disagrees with last BLE state
-    if (!muted && lastGateName && lastGateName !== 'UnmutedLive') {
-      lastGateName = 'UnmutedLive';
-      emit('gate', 'UnmutedLive');
+      if (muted) { enqueue(new Int16Array(SAMPLE_COUNT)); stats.mutedFrames++; }
+      else { const pcm = decodeAdpcm(adpcm, SAMPLE_COUNT, pred, idx); lastGoodFrame = pcm; enqueue(pcm); }
+      // Correct gate display if in-band muted flag disagrees with last BLE state
+      if (!muted && lastGateName && lastGateName !== 'UnmutedLive') {
+        lastGateName = 'UnmutedLive';
+        emit('gate', 'UnmutedLive');
+      }
+      stats.frames++;
+      if (stats.frames <= 3) emit('log', `Frame #${stats.frames} (single-pkt): seq=${seq} pred=${pred} idx=${idx} muted=${muted}`);
+      ensurePlayoutLoop();
+      emit('stats');
+      return;
     }
-    stats.frames++;
-    if (stats.frames <= 3) emit('log', `Frame #${stats.frames} (single-pkt): seq=${seq} pred=${pred} idx=${idx} muted=${muted}`);
-    ensurePlayoutLoop();
+
+    // Sub-packet mode
+    if (seq !== assemblySeq) {
+      if (assemblySeq !== null && assemblyPkts !== 0) finalizeFrame();
+      resetAssembly(); assemblySeq = seq;
+    }
+    assemblyMuted = assemblyMuted || muted;
+
+    if (pktIdx === 0 && dv.byteLength >= 20) {
+      assemblyPred = dv.getInt16(2, true); assemblyIdx = dv.getUint8(4);
+      assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 5, 15), 0);
+      assemblyPkts |= 1;
+    } else if (pktIdx >= 1 && pktIdx <= 3 && dv.byteLength >= 20) {
+      assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 2, 18), 15 + (pktIdx - 1) * 18);
+      assemblyPkts |= (1 << pktIdx);
+    } else if (pktIdx === 4 && dv.byteLength >= 13) {
+      assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 2, 11), 69);
+      assemblyPkts |= (1 << 4);
+    }
+
+    if (stats.frames < 5 && assemblyPkts === 0x1F)
+      emit('log', `Frame #${stats.frames + 1} complete: seq=${seq}, muted=${muted}`);
+
+    if (assemblyPkts === 0x1F) { finalizeFrame(); resetAssembly(); }
     emit('stats');
-    return;
+  } catch (e) {
+    malformedPktCount++;
+    emit('log', `Audio packet parse error #${malformedPktCount}: ${formatError(e)}`);
+    if (malformedPktCount >= 5) {
+      emit('connection', 'Audio stream error — reconnect');
+    }
   }
-
-  // Sub-packet mode
-  if (seq !== assemblySeq) {
-    if (assemblySeq !== null && assemblyPkts !== 0) finalizeFrame();
-    resetAssembly(); assemblySeq = seq;
-  }
-  assemblyMuted = assemblyMuted || muted;
-
-  if (pktIdx === 0 && dv.byteLength >= 20) {
-    assemblyPred = dv.getInt16(2, true); assemblyIdx = dv.getUint8(4);
-    assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 5, 15), 0);
-    assemblyPkts |= 1;
-  } else if (pktIdx >= 1 && pktIdx <= 3 && dv.byteLength >= 20) {
-    assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 2, 18), 15 + (pktIdx - 1) * 18);
-    assemblyPkts |= (1 << pktIdx);
-  } else if (pktIdx === 4 && dv.byteLength >= 13) {
-    assemblyAdpcm.set(new Uint8Array(dv.buffer, dv.byteOffset + 2, 11), 69);
-    assemblyPkts |= (1 << 4);
-  }
-
-  if (stats.frames < 5 && assemblyPkts === 0x1F)
-    emit('log', `Frame #${stats.frames + 1} complete: seq=${seq}, muted=${muted}`);
-
-  if (assemblyPkts === 0x1F) { finalizeFrame(); resetAssembly(); }
-  emit('stats');
 }
 
 // ── Battery / State handlers ─────────────────────────────────────────────
