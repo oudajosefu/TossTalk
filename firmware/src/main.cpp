@@ -107,6 +107,10 @@ static constexpr uint32_t BLE_SETTLING_MS = 3500;
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
 static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
 static constexpr size_t   MIC_RING_SIZE      = 4;
+static constexpr uint8_t  MIC_MAGNIFICATION  = 6;
+static constexpr int32_t  INPUT_TRIM_Q10     = 768;   // 0.75x digital trim
+static constexpr int16_t  INPUT_NOISE_GATE   = 96;    // suppress very low background noise
+static constexpr int16_t  INPUT_SOFT_LIMIT   = 12000; // adaptive attenuation target
 int16_t micRing[MIC_RING_SIZE][AUDIO_SAMPLE_COUNT] = {};
 size_t  micWriteIndex = 0;
 size_t  micReadIndex  = 0;
@@ -392,6 +396,28 @@ void encodeNewFrame() {
   int16_t samples[AUDIO_SAMPLE_COUNT];
   const bool haveMic = popMicFrame(samples);
   if (!(talkOpen && haveMic)) memset(samples, 0, sizeof(samples));
+  else {
+    int16_t peak = 0;
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+      int32_t s = (static_cast<int32_t>(samples[i]) * INPUT_TRIM_Q10) >> 10;
+      if (s > 32767) s = 32767;
+      if (s < -32768) s = -32768;
+      if (std::abs(s) < INPUT_NOISE_GATE) s = 0;
+      samples[i] = static_cast<int16_t>(s);
+      int16_t a = static_cast<int16_t>(std::abs(samples[i]));
+      if (a > peak) peak = a;
+    }
+
+    if (peak > INPUT_SOFT_LIMIT) {
+      const int32_t scaleQ12 = (static_cast<int32_t>(INPUT_SOFT_LIMIT) << 12) / peak;
+      for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+        int32_t s = (static_cast<int32_t>(samples[i]) * scaleQ12) >> 12;
+        if (s > 32767) s = 32767;
+        if (s < -32768) s = -32768;
+        samples[i] = static_cast<int16_t>(s);
+      }
+    }
+  }
 
   AdpcmState enc = adpcmState;
   txPred = static_cast<int16_t>(enc.predictor);
@@ -611,14 +637,15 @@ void setup() {
   mc.sample_rate        = AUDIO_SAMPLE_RATE;
   mc.over_sampling      = 1;
   mc.noise_filter_level = 32;
-  mc.magnification      = 8;   // 16 clips on SPM1423 PDM; 8 gives good level
+  mc.magnification      = MIC_MAGNIFICATION;
   mc.dma_buf_count      = 8;
   mc.dma_buf_len        = AUDIO_SAMPLE_COUNT;
   M5.Mic.config(mc);
   M5.Speaker.end();
   micAvailable = M5.Mic.isEnabled() && M5.Mic.begin();
-  Serial.printf("[MIC] available=%d adc=%d rate=%d mag=%d\n",
-                micAvailable, mc.use_adc, mc.sample_rate, mc.magnification);
+  Serial.printf("[MIC] available=%d adc=%d rate=%d mag=%d trim=%.2f gate=%d\n",
+                micAvailable, mc.use_adc, mc.sample_rate, mc.magnification,
+                static_cast<float>(INPUT_TRIM_Q10) / 1024.0f, INPUT_NOISE_GATE);
 
   M5.Display.setRotation(1);
   M5.Display.fillScreen(TFT_BLACK);
