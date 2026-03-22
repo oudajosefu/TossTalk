@@ -55,6 +55,8 @@ const jitterQueue = [];
 let activeAudioChar = null;
 let activeBattChar = null;
 let activeStateChar = null;
+let activeDisconnectDevice = null;
+let activeDisconnectHandler = null;
 
 // Sub-packet reassembly
 let assemblySeq = null, assemblyPkts = 0, assemblyAdpcm = null;
@@ -391,19 +393,28 @@ export async function connectBle() {
       return;
     }
 
-    emit('connection', 'Selecting device...');
-    // Always show the device picker — on reboot the device has a new
-    // random MAC, so the cached bleDevice is stale.
-    const device = await withTimeout(
-      navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }], optionalServices: [SERVICE_UUID] }),
-      30000, 'Device picker'
-    );
+    if (bleDevice?.gatt?.connected) {
+      emit('connection', 'Connected');
+      emit('log', 'Already connected');
+      return;
+    }
 
-    // Remove listeners from previous device to avoid zombie handlers
-    cleanupBle();
-    bleDevice = device;
+    let device = bleDevice;
+    if (!device) {
+      emit('connection', 'Selecting device...');
+      device = await withTimeout(
+        navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }], optionalServices: [SERVICE_UUID] }),
+        30000, 'Device picker'
+      );
+      bleDevice = device;
+    } else {
+      emit('log', 'Reusing remembered device');
+    }
 
-    device.addEventListener('gattserverdisconnected', () => {
+    // Ensure at most one disconnect listener is bound.
+    cleanupDisconnectListener();
+    activeDisconnectDevice = device;
+    activeDisconnectHandler = () => {
       emit('connection', 'Disconnected');
       emit('log', 'BLE disconnected');
       lastGateName = '';
@@ -411,7 +422,8 @@ export async function connectBle() {
       cleanupCharListeners();
       resetAudioPipeline();
       clearNoAudioMonitor();
-    });
+    };
+    device.addEventListener('gattserverdisconnected', activeDisconnectHandler);
 
     let service = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -493,6 +505,14 @@ export async function connectBle() {
 
 function clearReconnect() { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
 
+function cleanupDisconnectListener() {
+  if (activeDisconnectDevice && activeDisconnectHandler) {
+    try { activeDisconnectDevice.removeEventListener('gattserverdisconnected', activeDisconnectHandler); } catch {}
+  }
+  activeDisconnectDevice = null;
+  activeDisconnectHandler = null;
+}
+
 // Remove event listeners from characteristics to prevent duplicate handlers
 function cleanupCharListeners() {
   if (activeAudioChar) { try { activeAudioChar.removeEventListener('characteristicvaluechanged', handleAudioSubPacket); } catch {} activeAudioChar = null; }
@@ -503,6 +523,7 @@ function cleanupCharListeners() {
 // Full cleanup of BLE state — called before connecting to a new device
 function cleanupBle() {
   clearReconnect();
+  cleanupDisconnectListener();
   cleanupCharListeners();
   if (bleDevice) {
     try { bleDevice.gatt.disconnect(); } catch {}

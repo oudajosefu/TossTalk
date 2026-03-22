@@ -79,6 +79,9 @@ bool     firstAudioSent     = false;
 bool     connParamsUpdated  = false;
 bool     micAvailable       = false;
 volatile bool displayDirty  = false;  // set in BLE callbacks, drawn in loop()
+volatile bool advRestartPending = false;
+uint8_t advRestartTries = 0;
+uint32_t advNextRetryMs = 0;
 Preferences prefs;
 
 // Persisted random-static BLE address for user-friendly reconnect behavior.
@@ -221,17 +224,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     connParamsUpdated  = false;
     resetAudioTxState();
     displayDirty       = true;
+    advRestartPending  = true;
+    advRestartTries    = 0;
+    advNextRetryMs     = millis();
     Serial.println("[BLE] Disconnected");
-    // Restart advertising robustly so reconnect is always possible.
-    auto* adv = NimBLEDevice::getAdvertising();
-    if (adv) {
-      adv->stop();
-      bool ok = adv->start();
-      if (!ok) {
-        delay(20);
-        adv->start();
-      }
-    }
   }
 };
 
@@ -688,6 +684,28 @@ void loop() {
   }
 
   const bool streaming = bleClientConnected && firstAudioSent;
+
+  // Never block inside BLE callbacks; retry advertising from loop.
+  if (!bleClientConnected && advRestartPending && now >= advNextRetryMs) {
+    auto* adv = NimBLEDevice::getAdvertising();
+    bool ok = false;
+    if (adv) {
+      adv->stop();
+      ok = adv->start();
+    }
+    if (ok) {
+      advRestartPending = false;
+      Serial.println("[BLE] Advertising restarted");
+    } else {
+      advRestartTries++;
+      if (advRestartTries >= 20) {
+        advRestartPending = false;
+        Serial.println("[BLE] Advertising restart failed (gave up)");
+      } else {
+        advNextRetryMs = now + 100;
+      }
+    }
+  }
 
   // IMU must be polled every loop iteration — a throw is only ~300ms
   // and the freefall window can be <100ms.  IMU read is a fast I2C
