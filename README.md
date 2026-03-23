@@ -16,7 +16,7 @@ Power it on, pair it, and pass it around whenever a group needs one shared mic.
 ## Quick start
 
 1. Power on TossTalk
-2. Open the TossTalk web page in Chrome or Edge (desktop)
+2. Open the TossTalk web page in Chrome or Edge (desktop) at [kevinl95.github.io/TossTalk](https://kevinl95.github.io/TossTalk/)
 3. Connect the device
 4. Pass or toss the mic to whoever needs to speak
 
