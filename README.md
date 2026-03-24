@@ -4,6 +4,8 @@ TossTalk is a tossable wireless microphone built on the M5StickC Plus2.
 
 Power it on, pair it, and pass it around whenever a group needs one shared mic.
 
+Build guide: [TossTalk on Instructables](https://www.instructables.com/TossTalk-Build-an-Inexpensive-Tossable-Rollable-Wi/)
+
 ## What it does
 
 - Detects when the device is in the air and mutes throw noise
