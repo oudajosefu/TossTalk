@@ -110,10 +110,9 @@ static constexpr uint32_t BLE_SETTLING_MS = 3500;
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
 static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
 static constexpr size_t   MIC_RING_SIZE      = 4;
-static constexpr uint8_t  MIC_MAGNIFICATION  = 6;
-static constexpr int32_t  INPUT_TRIM_Q10     = 768;   // 0.75x digital trim
-static constexpr int16_t  INPUT_NOISE_GATE   = 96;    // suppress very low background noise
-static constexpr int16_t  INPUT_SOFT_LIMIT   = 12000; // adaptive attenuation target
+static constexpr int32_t  MIC_TARGET_GAIN_Q12 = 16384; // 4.0× in Q12 (desired amplification)
+static constexpr int16_t  INPUT_NOISE_GATE   = 24;     // suppress background noise (in raw-mic units, pre-gain)
+static constexpr int16_t  INPUT_SOFT_LIMIT   = 16000;  // peak output ceiling after gain
 static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
 static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK
 static constexpr int        I2S_DATA_PIN = 41;  // XIAO S3 Sense PDM DATA
@@ -126,6 +125,10 @@ size_t  micQueued     = 0;
 // ── IMA ADPCM codec ─────────────────────────────────────────────────────
 struct AdpcmState { int predictor = 0; int index = 0; };
 AdpcmState adpcmState;
+
+// ── Audio processing state (persists between frames) ─────────────────────
+static int32_t prevLimiterScaleQ12 = 16384; // start at target gain (4.0× in Q12)
+static int32_t dcEst = 0;                   // DC offset estimate (sample units)
 
 static const int kIndexTable[16] = {
   -1, -1, -1, -1, 2, 4, 6, 8,
@@ -306,13 +309,8 @@ void queueMicCapture() {
                            AUDIO_SAMPLE_COUNT * sizeof(int16_t),
                            &bytesRead, 0);  // non-blocking
   if (err == ESP_OK && bytesRead == AUDIO_SAMPLE_COUNT * sizeof(int16_t)) {
-    // Apply magnification (M5Unified did this internally)
-    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; i++) {
-      int32_t s = static_cast<int32_t>(micRing[micWriteIndex][i]) * MIC_MAGNIFICATION;
-      if (s > 32767) s = 32767;
-      if (s < -32768) s = -32768;
-      micRing[micWriteIndex][i] = static_cast<int16_t>(s);
-    }
+    // Raw samples — no magnification here; gain is applied together with
+    // the soft limiter in encodeNewFrame() to prevent clipping distortion.
     micWriteIndex = (micWriteIndex + 1) % MIC_RING_SIZE;
     if (micQueued < MIC_RING_SIZE) ++micQueued;
     else micReadIndex = (micReadIndex + 1) % MIC_RING_SIZE;
@@ -365,26 +363,72 @@ void encodeNewFrame() {
   const bool haveMic = popMicFrame(samples);
   if (!(talkOpen && haveMic)) memset(samples, 0, sizeof(samples));
   else {
-    int16_t peak = 0;
+    // ── DC offset removal (simple IIR, ~5 Hz cutoff at 8 kHz) ─────────
+    // dcEst tracks the running DC bias in sample units.
+    // y[n] = x[n] - dcEst;  dcEst += (x[n] - dcEst) >> 8
+    // Alpha = 1 - 1/256 = 0.996 → cutoff ≈ 5 Hz.  Overflow-safe.
     for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
-      int32_t s = (static_cast<int32_t>(samples[i]) * INPUT_TRIM_Q10) >> 10;
+      int32_t raw = static_cast<int32_t>(samples[i]);
+      dcEst += (raw - dcEst) >> 8;
+      int32_t s = raw - dcEst;
       if (s > 32767) s = 32767;
       if (s < -32768) s = -32768;
-      if (std::abs(s) < INPUT_NOISE_GATE) s = 0;
       samples[i] = static_cast<int16_t>(s);
-      int16_t a = static_cast<int16_t>(std::abs(samples[i]));
-      if (a > peak) peak = a;
     }
 
-    if (peak > INPUT_SOFT_LIMIT) {
-      const int32_t scaleQ12 = (static_cast<int32_t>(INPUT_SOFT_LIMIT) << 12) / peak;
-      for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
-        int32_t s = (static_cast<int32_t>(samples[i]) * scaleQ12) >> 12;
-        if (s > 32767) s = 32767;
-        if (s < -32768) s = -32768;
-        samples[i] = static_cast<int16_t>(s);
+    // ── Noise gate (on raw-level samples, before gain) ────────────────
+    // Hard-zero below half-threshold, squared fade up to threshold.
+    static constexpr int32_t GATE_KNEE = INPUT_NOISE_GATE / 2;  // 12
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+      int32_t s = static_cast<int32_t>(samples[i]);
+      int32_t mag = std::abs(s);
+      if (mag < GATE_KNEE) {
+        s = 0;
+      } else if (mag < INPUT_NOISE_GATE) {
+        int32_t range = INPUT_NOISE_GATE - GATE_KNEE;
+        int32_t above = mag - GATE_KNEE;
+        s = (s * above * above) / (range * range);
       }
+      samples[i] = static_cast<int16_t>(s);
     }
+
+    // ── Unified gain + soft limiter (no clipping possible) ────────────
+    // Compute raw peak, then cap the gain so output never exceeds the
+    // soft limit.  This completely eliminates hard clipping distortion.
+    int32_t rawPeak = 0;
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+      int32_t a = std::abs(static_cast<int32_t>(samples[i]));
+      if (a > rawPeak) rawPeak = a;
+    }
+
+    // Desired gain = MIC_TARGET_GAIN_Q12 (4.0× = 16384 in Q12)
+    // If that would push the peak above INPUT_SOFT_LIMIT, reduce gain.
+    int32_t targetGainQ12 = MIC_TARGET_GAIN_Q12;
+    if (rawPeak > 0) {
+      int32_t maxGainQ12 = (static_cast<int32_t>(INPUT_SOFT_LIMIT) << 12) / rawPeak;
+      if (targetGainQ12 > maxGainQ12) targetGainQ12 = maxGainQ12;
+    }
+
+    // Smooth gain transitions: instant attack, slow release (~8 frames)
+    int32_t curScale = prevLimiterScaleQ12;
+    if (targetGainQ12 < curScale) {
+      curScale = targetGainQ12;  // attack: immediate
+    } else {
+      curScale = curScale + ((targetGainQ12 - curScale) >> 3);  // release: 1/8 per frame
+    }
+
+    // Apply gain with linear interpolation across the frame
+    const int32_t startScale = prevLimiterScaleQ12;
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+      int32_t interpScale = startScale +
+          ((curScale - startScale) * static_cast<int32_t>(i)) /
+          static_cast<int32_t>(AUDIO_SAMPLE_COUNT);
+      int32_t s = (static_cast<int32_t>(samples[i]) * interpScale) >> 12;
+      if (s > 32767) s = 32767;
+      if (s < -32768) s = -32768;
+      samples[i] = static_cast<int16_t>(s);
+    }
+    prevLimiterScaleQ12 = curScale;
   }
 
   AdpcmState enc = adpcmState;
@@ -617,9 +661,10 @@ void setupMic() {
 
   micAvailable = (i2s_driver_install(I2S_PORT, &i2s_cfg, 0, NULL) == ESP_OK &&
                   i2s_set_pin(I2S_PORT, &pin_cfg) == ESP_OK);
-  Serial.printf("[MIC] I2S PDM available=%d rate=%d mag=%d trim=%.2f gate=%d\n",
-                micAvailable, AUDIO_SAMPLE_RATE, MIC_MAGNIFICATION,
-                static_cast<float>(INPUT_TRIM_Q10) / 1024.0f, INPUT_NOISE_GATE);
+  Serial.printf("[MIC] I2S PDM available=%d rate=%d gain=%.1fx gate=%d limit=%d\n",
+                micAvailable, AUDIO_SAMPLE_RATE,
+                static_cast<float>(MIC_TARGET_GAIN_Q12) / 4096.0f,
+                INPUT_NOISE_GATE, INPUT_SOFT_LIMIT);
 }
 
 // ── Arduino entry points ─────────────────────────────────────────────────

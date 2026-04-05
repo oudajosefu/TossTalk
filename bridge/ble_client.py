@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import struct
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -235,6 +236,7 @@ class TossTalkBleClient:
             if len(data) < 2:
                 return
             self.sub_pkts += 1
+            now = time.perf_counter()
 
             seq = data[0]
             byte1 = data[1]
@@ -258,10 +260,30 @@ class TossTalkBleClient:
                 if muted:
                     pcm = np.zeros(SAMPLE_COUNT, dtype=np.int16)
                     self.muted_frames += 1
+                    log.debug("[BLE-RX] seq=%d MUTED (single-pkt)", seq)
                 else:
                     pcm = adpcm.decode(adpcm_data, SAMPLE_COUNT, pred, idx)
+                    pcm_peak = int(np.max(np.abs(pcm)))
+                    pcm_rms = float(np.sqrt(np.mean(pcm.astype(np.float64) ** 2)))
+                    log.debug(
+                        "[BLE-RX] seq=%d single-pkt pred=%d idx=%d peak=%d rms=%.0f",
+                        seq,
+                        pred,
+                        idx,
+                        pcm_peak,
+                        pcm_rms,
+                    )
+                    if pcm_peak >= 32700:
+                        log.warning(
+                            "[BLE-RX] CLIPPED ADPCM output seq=%d peak=%d pred=%d idx=%d",
+                            seq,
+                            pcm_peak,
+                            pred,
+                            idx,
+                        )
 
                 self.frames += 1
+                self._track_timing(now)
                 self.audio_cb(pcm)
                 return
 
@@ -287,6 +309,14 @@ class TossTalkBleClient:
                 self._assembly_adpcm[69:80] = data[2:13]
                 self._assembly_pkts |= 1 << 4
 
+            log.debug(
+                "[BLE-RX] seq=%d sub-pkt=%d assembled=0x%02X muted=%s",
+                seq,
+                pkt_idx,
+                self._assembly_pkts,
+                muted,
+            )
+
             # All 5 sub-packets received
             if self._assembly_pkts == 0x1F:
                 self._finalize_frame()
@@ -294,6 +324,42 @@ class TossTalkBleClient:
 
         except Exception:
             log.exception("Error parsing audio packet")
+
+    def _track_timing(self, now: float) -> None:
+        """Track frame arrival timing and log periodic diagnostics."""
+        if not hasattr(self, "_last_frame_time"):
+            self._last_frame_time = 0.0
+            self._frame_diag_time = 0.0
+            self._max_frame_gap_ms = 0.0
+            self._min_frame_gap_ms = 999999.0
+            self._seq_gaps = 0
+
+        if self._last_frame_time > 0:
+            gap_ms = (now - self._last_frame_time) * 1000
+            if gap_ms > self._max_frame_gap_ms:
+                self._max_frame_gap_ms = gap_ms
+            if gap_ms < self._min_frame_gap_ms:
+                self._min_frame_gap_ms = gap_ms
+            # A frame should arrive every ~20ms; flag anomalies
+            if gap_ms > 50:
+                log.debug("[BLE-TIMING] Frame gap %.1fms (expected ~20ms)", gap_ms)
+        self._last_frame_time = now
+
+        # Periodic summary every 2 seconds
+        if now - self._frame_diag_time >= 2.0:
+            self._frame_diag_time = now
+            log.debug(
+                "[BLE-DIAG] frames=%d muted=%d concealed=%d drops=%d "
+                "frame_gap=[%.1f-%.1f]ms",
+                self.frames,
+                self.muted_frames,
+                self.concealed_frames,
+                self.drops,
+                self._min_frame_gap_ms if self._min_frame_gap_ms < 999999 else 0,
+                self._max_frame_gap_ms,
+            )
+            self._max_frame_gap_ms = 0.0
+            self._min_frame_gap_ms = 999999.0
 
     # ── Assembly helpers ──────────────────────────────────────────────────
 
@@ -309,6 +375,7 @@ class TossTalkBleClient:
         if self._assembly_muted:
             pcm = np.zeros(SAMPLE_COUNT, dtype=np.int16)
             self.muted_frames += 1
+            log.debug("[BLE-RX] seq=%s MUTED (sub-pkt assembly)", self._assembly_seq)
         else:
             pcm = adpcm.decode(
                 bytes(self._assembly_adpcm),
@@ -316,11 +383,30 @@ class TossTalkBleClient:
                 self._assembly_pred,
                 self._assembly_idx,
             )
+            pcm_peak = int(np.max(np.abs(pcm)))
+            pcm_rms = float(np.sqrt(np.mean(pcm.astype(np.float64) ** 2)))
+            log.debug(
+                "[BLE-RX] seq=%s assembled pred=%d idx=%d peak=%d rms=%.0f pkts=0x%02X",
+                self._assembly_seq,
+                self._assembly_pred,
+                self._assembly_idx,
+                pcm_peak,
+                pcm_rms,
+                self._assembly_pkts,
+            )
+            if self._assembly_pkts != 0x1F:
+                log.warning(
+                    "[BLE-RX] INCOMPLETE assembly seq=%s pkts=0x%02X (missing bits=0x%02X)",
+                    self._assembly_seq,
+                    self._assembly_pkts,
+                    0x1F ^ self._assembly_pkts,
+                )
 
         self.frames += 1
         if self._assembly_seq is not None:
             self._inject_concealment(self._assembly_seq)
             self._last_complete_seq = self._assembly_seq
+        self._track_timing(time.perf_counter())
         self.audio_cb(pcm)
 
     def _inject_concealment(self, seq: int) -> None:
@@ -329,6 +415,13 @@ class TossTalkBleClient:
             gap = ((seq - self._last_complete_seq + 256) % 256) - 1
             if 0 < gap < 60:
                 conceal = min(gap, MAX_CONCEAL)
+                log.debug(
+                    "[BLE-CONCEAL] Gap detected: last_seq=%d cur_seq=%d gap=%d concealing=%d",
+                    self._last_complete_seq,
+                    seq,
+                    gap,
+                    conceal,
+                )
                 for _ in range(conceal):
                     silence = np.zeros(SAMPLE_COUNT, dtype=np.int16)
                     self.concealed_frames += 1

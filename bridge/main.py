@@ -64,11 +64,36 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+    # Console always gets INFO; verbose DEBUG goes to a log file
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-5s %(name)s: %(message)s", datefmt="%H:%M:%S"
+        )
     )
+    root_logger.addHandler(console_handler)
+
+    if args.verbose:
+        import os
+
+        log_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "bridge-debug.log",
+        )
+        file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s.%(msecs)03d %(levelname)-5s %(name)s: %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        root_logger.addHandler(file_handler)
+        print(f"Verbose logging to: {log_path}")
 
     if args.list_devices:
         print("Available audio output devices:")
