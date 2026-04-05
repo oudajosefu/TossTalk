@@ -17,7 +17,7 @@ Original build guide (M5StickC Plus2 version): [TossTalk on Instructables](https
 ## Quick start
 
 1. Power on TossTalk
-2. Open the TossTalk web page in Chrome or Edge (desktop) at [oudajosefu.github.io/TossTalk](https://oudajosefu.github.io/TossTalk/)
+2. Open the TossTalk web page in Chrome or Edge (desktop) at [oudajosefu.github.io/TossTalk/web](https://oudajosefu.github.io/TossTalk/web)
 3. Connect the device
 4. Pass or toss the mic to whoever needs to speak
 
