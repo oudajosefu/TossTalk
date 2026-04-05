@@ -13,12 +13,18 @@ def find_boot_app0() -> pathlib.Path:
 
     pkg_dir = os.environ.get("PLATFORMIO_PACKAGES_DIR")
     if pkg_dir:
-      candidates.append(pathlib.Path(pkg_dir))
+        candidates.append(pathlib.Path(pkg_dir))
 
     candidates.append(pathlib.Path.home() / ".platformio" / "packages")
 
     for base in candidates:
-        p = base / "framework-arduinoespressif32" / "tools" / "partitions" / "boot_app0.bin"
+        p = (
+            base
+            / "framework-arduinoespressif32"
+            / "tools"
+            / "partitions"
+            / "boot_app0.bin"
+        )
         if p.exists():
             return p
 
@@ -26,8 +32,14 @@ def find_boot_app0() -> pathlib.Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Merge ESP32 firmware binaries into one flashable image")
-    parser.add_argument("--env-dir", required=True, help="PlatformIO env output directory (contains firmware.bin)")
+    parser = argparse.ArgumentParser(
+        description="Merge ESP32 firmware binaries into one flashable image"
+    )
+    parser.add_argument(
+        "--env-dir",
+        required=True,
+        help="PlatformIO env output directory (contains firmware.bin)",
+    )
     parser.add_argument("--out", required=True, help="Output merged bin path")
     parser.add_argument("--flash-mode", default="dio")
     parser.add_argument("--flash-freq", default="40m")
@@ -53,7 +65,7 @@ def main() -> int:
         "-m",
         "esptool",
         "--chip",
-        "esp32",
+        "esp32s3",
         "merge_bin",
         "-o",
         str(out_path),
@@ -63,7 +75,7 @@ def main() -> int:
         args.flash_freq,
         "--flash_size",
         args.flash_size,
-        "0x1000",
+        "0x0000",
         str(bootloader),
         "0x8000",
         str(partitions),

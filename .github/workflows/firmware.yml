@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'firmware/**'
-      - 'scripts/**'
-      - '.github/workflows/firmware.yml'
+      - "firmware/**"
+      - "scripts/**"
+      - ".github/workflows/firmware.yml"
   pull_request:
     paths:
-      - 'firmware/**'
-      - 'scripts/**'
-      - '.github/workflows/firmware.yml'
+      - "firmware/**"
+      - "scripts/**"
+      - ".github/workflows/firmware.yml"
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install PlatformIO
         run: pip install platformio esptool
@@ -37,15 +37,15 @@ jobs:
       - name: Merge firmware image
         run: |
           python ../scripts/merge_firmware.py \
-            --env-dir .pio/build/m5stick-c-plus2 \
-            --out .pio/build/m5stick-c-plus2/tosstalk-merged.bin
+            --env-dir .pio/build/xiao-esp32s3 \
+            --out .pio/build/xiao-esp32s3/tosstalk-merged.bin
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: firmware-binaries
           path: |
-            firmware/.pio/build/m5stick-c-plus2/firmware.bin
-            firmware/.pio/build/m5stick-c-plus2/bootloader.bin
-            firmware/.pio/build/m5stick-c-plus2/partitions.bin
-            firmware/.pio/build/m5stick-c-plus2/tosstalk-merged.bin
+            firmware/.pio/build/xiao-esp32s3/firmware.bin
+            firmware/.pio/build/xiao-esp32s3/bootloader.bin
+            firmware/.pio/build/xiao-esp32s3/partitions.bin
+            firmware/.pio/build/xiao-esp32s3/tosstalk-merged.bin

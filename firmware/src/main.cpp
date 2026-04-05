@@ -1,7 +1,7 @@
-// TossTalk – throwable wireless microphone firmware
-// Target: M5StickC Plus2 (ESP32-PICO-V3-02)
+// TossTalk - throwable wireless microphone firmware
+// Target: Seeed Studio XIAO ESP32 S3 Sense + GY-521 MPU-6050
 //
-// Architecture v2 – small-packet streaming
+// Architecture v2 - small-packet streaming
 // -----------------------------------------
 // Every audio notification is <= 20 bytes so it always fits in the default
 // 23-byte ATT MTU.  No MTU negotiation is required for the audio stream
@@ -27,7 +27,10 @@
 //
 //   Total: 30 + 36*3 + 22 = 160 samples per frame.
 
-#include <M5Unified.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <driver/i2s.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <cmath>
@@ -55,6 +58,9 @@ enum class GateState : uint8_t {
   Reacquire          = 3,
 };
 
+// ── IMU object ──────────────────────────────────────────────────────────
+Adafruit_MPU6050 mpu;
+
 // ── BLE objects ──────────────────────────────────────────────────────────
 NimBLEServer*         bleServer   = nullptr;
 NimBLECharacteristic* audioChar   = nullptr;
@@ -67,7 +73,6 @@ GateState gateState          = GateState::UnmutedLive;
 uint32_t  lockoutStartMs     = 0;
 uint32_t  reacquireStartMs   = 0;
 uint32_t  airborneStartMs    = 0;
-uint32_t  lastBatteryTickMs  = 0;
 uint32_t  lastBatteryNotifyMs = 0;
 uint32_t  lastAudioTickMs    = 0;
 uint8_t   frameSeq           = 0;
@@ -78,7 +83,6 @@ uint16_t bleConnHandle      = 0xFFFF;
 bool     firstAudioSent     = false;
 bool     connParamsUpdated  = false;
 bool     micAvailable       = false;
-volatile bool displayDirty  = false;  // set in BLE callbacks, drawn in loop()
 volatile bool advRestartPending = false;
 uint8_t advRestartTries = 0;
 uint32_t advNextRetryMs = 0;
@@ -98,12 +102,8 @@ uint32_t dbgFramesSkip  = 0;   // frames intentionally skipped for backoff
 uint32_t lastDiagMs     = 0;
 uint16_t consecFail     = 0;   // consecutive rawNotify failures
 
-// Throttle heavy I/O while streaming
-uint32_t lastHeavyIoMs = 0;
-static constexpr uint32_t HEAVY_IO_INTERVAL_MS = 500;  // IMU+battery+display at most 2x/sec while streaming
-
 // How long after connect to avoid ALL non-BLE work so the NimBLE stack
-// can handle service discovery on single-core ESP32 unimpeded.
+// can handle service discovery unimpeded.
 static constexpr uint32_t BLE_SETTLING_MS = 3500;
 
 // ── Audio capture ────────────────────────────────────────────────────────
@@ -114,6 +114,10 @@ static constexpr uint8_t  MIC_MAGNIFICATION  = 6;
 static constexpr int32_t  INPUT_TRIM_Q10     = 768;   // 0.75x digital trim
 static constexpr int16_t  INPUT_NOISE_GATE   = 96;    // suppress very low background noise
 static constexpr int16_t  INPUT_SOFT_LIMIT   = 12000; // adaptive attenuation target
+static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
+static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK
+static constexpr int        I2S_DATA_PIN = 41;  // XIAO S3 Sense PDM DATA
+
 int16_t micRing[MIC_RING_SIZE][AUDIO_SAMPLE_COUNT] = {};
 size_t  micWriteIndex = 0;
 size_t  micReadIndex  = 0;
@@ -136,13 +140,8 @@ static const int kStepTable[89] = {
   18500,20350,22385,24623,27086,29794,32767,
 };
 
-uint8_t lastBatteryPercent = 0;
-bool    lastCharging       = false;
-int32_t smoothBattX100     = -1;   // EMA accumulator ×100, -1 = uninitialised
-
 // ── Forward declarations ─────────────────────────────────────────────────
 void notifyGateState();
-void drawRuntimeStatus();
 void resetAudioTxState();
 
 // ── Notification warmup guard ────────────────────────────────────────────
@@ -182,38 +181,16 @@ const char* gateStateName(GateState s) {
   return "?";
 }
 
-// ── Display ──────────────────────────────────────────────────────────────
-void drawRuntimeStatus() {
-  M5.Display.fillRect(0, 50, M5.Display.width(), 66, TFT_BLACK);
-  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Display.setCursor(4, 54);
-  M5.Display.printf("%s", gateStateName(gateState));
-  M5.Display.setCursor(4, 74);
-  uint16_t mtu = (bleConnHandle != 0xFFFF) ? ble_att_mtu(bleConnHandle) : 0;
-  M5.Display.printf("BLE %s MTU%u", bleClientConnected ? "on" : "--", mtu);
-  M5.Display.setCursor(4, 94);
-  M5.Display.printf("MIC %s seq%u", micAvailable ? "ok" : "--", frameSeq);
-}
-
-void drawBatteryHud(uint8_t percent, bool charging) {
-  uint16_t color = percent <= 10 ? TFT_RED : percent <= 20 ? TFT_YELLOW : TFT_WHITE;
-  M5.Display.setTextColor(color, TFT_BLACK);
-  M5.Display.fillRect(0, 0, M5.Display.width(), 18, TFT_BLACK);
-  M5.Display.setCursor(4, 4);
-  M5.Display.printf("BAT %3u%% %s", percent, charging ? "CHG" : "   ");
-}
-
 // ── BLE callbacks ────────────────────────────────────────────────────────
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
-    // Stop advertising while connected – frees radio time for GATT.
+    // Stop advertising while connected - frees radio time for GATT.
     NimBLEDevice::getAdvertising()->stop();
     bleClientConnected = true;
     bleConnectedAtMs   = millis();
     bleConnHandle      = desc->conn_handle;
     firstAudioSent     = false;
     resetAudioTxState();
-    displayDirty       = true;  // draw from loop(), never SPI in BLE callback
     Serial.printf("[BLE] Connected handle=%u\n", bleConnHandle);
   }
   void onDisconnect(NimBLEServer* pServer) override {
@@ -223,7 +200,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     firstAudioSent     = false;
     connParamsUpdated  = false;
     resetAudioTxState();
-    displayDirty       = true;
     advRestartPending  = true;
     advRestartTries    = 0;
     advNextRetryMs     = millis();
@@ -237,15 +213,18 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
       gateState = GateState::Reacquire;
       reacquireStartMs = millis();
       notifyGateState();
-      drawRuntimeStatus();
     }
   }
 };
 
 // ── IMU / gate logic ─────────────────────────────────────────────────────
 float readAccelMagnitudeG() {
-  auto d = M5.Imu.getImuData();
-  return std::sqrt(d.accel.x*d.accel.x + d.accel.y*d.accel.y + d.accel.z*d.accel.z);
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  constexpr float G = 9.80665f;
+  return std::sqrt(a.acceleration.x * a.acceleration.x +
+                   a.acceleration.y * a.acceleration.y +
+                   a.acceleration.z * a.acceleration.z) / G;
 }
 
 void notifyGateState() {
@@ -287,34 +266,17 @@ void updateGateState() {
     Serial.printf("[GATE] %s -> %s (mag=%.2fg)\n",
                   gateStateName(prev), gateStateName(gateState), mag);
     notifyGateState();
-    displayDirty = true;  // defer display to heavy-IO block
   }
 }
 
-// ── Battery ──────────────────────────────────────────────────────────────
+// ── Battery (stub - no fuel gauge on XIAO S3) ───────────────────────────
 void updateBattery() {
   const uint32_t now = millis();
-  if (now - lastBatteryTickMs < 1000) return;
-  lastBatteryTickMs = now;
-  const int32_t raw  = static_cast<int32_t>(M5.Power.getBatteryLevel());
-  const bool    chrg = M5.Power.isCharging();
-
-  // EMA: α ≈ 0.10  →  smoothed = (raw*1000 + prev*90) / 100
-  // raw is 0-100, smoothBattX100 is in ×100 scale (0-10000).
-  // raw must be scaled to ×100 first: raw*100*10 = raw*1000.
-  if (smoothBattX100 < 0) smoothBattX100 = raw * 100;           // seed on first read
-  smoothBattX100 = (raw * 1000 + smoothBattX100 * 90) / 100;
-  const uint8_t pct = static_cast<uint8_t>((smoothBattX100 + 50) / 100);  // round
-
-  drawBatteryHud(pct, chrg);
-  if (pct != lastBatteryPercent || chrg != lastCharging || (now - lastBatteryNotifyMs) >= 10000) {
-    lastBatteryNotifyMs = now;
-    lastBatteryPercent  = pct;
-    lastCharging        = chrg;
-    uint8_t pl[2] = {pct, static_cast<uint8_t>(chrg ? 1 : 0)};
-    batteryChar->setValue(pl, sizeof(pl));
-    if (canNotify()) rawNotify(batteryChar, pl, sizeof(pl));
-  }
+  if (now - lastBatteryNotifyMs < 10000) return;
+  lastBatteryNotifyMs = now;
+  uint8_t pl[2] = {100, 0};  // 100%, not charging
+  batteryChar->setValue(pl, sizeof(pl));
+  if (canNotify()) rawNotify(batteryChar, pl, sizeof(pl));
 }
 
 // ── IMA ADPCM encoder ───────────────────────────────────────────────────
@@ -339,8 +301,18 @@ uint8_t encodeNibble(int16_t sample, AdpcmState& st) {
 // ── Mic ring buffer ──────────────────────────────────────────────────────
 void queueMicCapture() {
   if (!micAvailable) return;
-  while (M5.Mic.isRecording() < 2) {
-    if (!M5.Mic.record(micRing[micWriteIndex], AUDIO_SAMPLE_COUNT, AUDIO_SAMPLE_RATE, false)) break;
+  size_t bytesRead = 0;
+  esp_err_t err = i2s_read(I2S_PORT, micRing[micWriteIndex],
+                           AUDIO_SAMPLE_COUNT * sizeof(int16_t),
+                           &bytesRead, 0);  // non-blocking
+  if (err == ESP_OK && bytesRead == AUDIO_SAMPLE_COUNT * sizeof(int16_t)) {
+    // Apply magnification (M5Unified did this internally)
+    for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; i++) {
+      int32_t s = static_cast<int32_t>(micRing[micWriteIndex][i]) * MIC_MAGNIFICATION;
+      if (s > 32767) s = 32767;
+      if (s < -32768) s = -32768;
+      micRing[micWriteIndex][i] = static_cast<int16_t>(s);
+    }
     micWriteIndex = (micWriteIndex + 1) % MIC_RING_SIZE;
     if (micQueued < MIC_RING_SIZE) ++micQueued;
     else micReadIndex = (micReadIndex + 1) % MIC_RING_SIZE;
@@ -469,7 +441,7 @@ bool sendNextSubPacket() {
 
   bool ok = rawNotify(audioChar, pkt, len);
   if (!ok) {
-    // BLE buffer full – DON'T advance txSubNext, retry on next loop
+    // BLE buffer full - DON'T advance txSubNext, retry on next loop
     txLastSubMs = millis();  // still pace the retry
     return false;
   }
@@ -484,7 +456,7 @@ bool sendNextSubPacket() {
       firstAudioSent = true;
       Serial.printf("[BLE] First audio seq=%u MTU=%u\n",
                     txFrameSeq, ble_att_mtu(bleConnHandle));
-      displayDirty = true;
+
     }
     ++frameSeq;
   }
@@ -521,7 +493,7 @@ void sendMicAudioFrame() {
       if (!firstAudioSent) {
         firstAudioSent = true;
         Serial.printf("[BLE] Single-pkt mode seq=%u MTU=%u\n", txFrameSeq, mtu);
-        displayDirty = true;
+
       }
     } else {
       ++consecFail;
@@ -597,7 +569,7 @@ void setupBle() {
   // Delete all stored bonds so the ESP32 side is clean too.
   NimBLEDevice::deleteAllBonds();
 
-  // Disable bonding and security entirely – we don't need encryption for
+  // Disable bonding and security entirely - we don't need encryption for
   // classroom audio, and bonding causes Windows to cache our GATT database
   // which breaks when the firmware changes.
   NimBLEDevice::setSecurityAuth(false, false, false);
@@ -624,45 +596,58 @@ void setupBle() {
   adv->start();
 }
 
+// ── PDM microphone setup (XIAO ESP32 S3 Sense) ─────────────────────────
+void setupMic() {
+  i2s_config_t i2s_cfg = {};
+  i2s_cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM);
+  i2s_cfg.sample_rate = AUDIO_SAMPLE_RATE;
+  i2s_cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+  i2s_cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  i2s_cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+  i2s_cfg.dma_buf_count = 8;
+  i2s_cfg.dma_buf_len = AUDIO_SAMPLE_COUNT;
+  i2s_cfg.use_apll = false;
+
+  i2s_pin_config_t pin_cfg = {};
+  pin_cfg.bck_io_num = I2S_PIN_NO_CHANGE;
+  pin_cfg.ws_io_num = I2S_CLK_PIN;
+  pin_cfg.data_out_num = I2S_PIN_NO_CHANGE;
+  pin_cfg.data_in_num = I2S_DATA_PIN;
+
+  micAvailable = (i2s_driver_install(I2S_PORT, &i2s_cfg, 0, NULL) == ESP_OK &&
+                  i2s_set_pin(I2S_PORT, &pin_cfg) == ESP_OK);
+  Serial.printf("[MIC] I2S PDM available=%d rate=%d mag=%d trim=%.2f gate=%d\n",
+                micAvailable, AUDIO_SAMPLE_RATE, MIC_MAGNIFICATION,
+                static_cast<float>(INPUT_TRIM_Q10) / 1024.0f, INPUT_NOISE_GATE);
+}
+
 // ── Arduino entry points ─────────────────────────────────────────────────
 void setup() {
-  auto cfg = M5.config();
-  M5.begin(cfg);
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) { delay(10); }  // wait for USB-CDC host to connect (up to 3s)
 
-  auto mc = M5.Mic.config();
-  mc.sample_rate        = AUDIO_SAMPLE_RATE;
-  mc.over_sampling      = 1;
-  mc.noise_filter_level = 32;
-  mc.magnification      = MIC_MAGNIFICATION;
-  mc.dma_buf_count      = 8;
-  mc.dma_buf_len        = AUDIO_SAMPLE_COUNT;
-  M5.Mic.config(mc);
-  M5.Speaker.end();
-  micAvailable = M5.Mic.isEnabled() && M5.Mic.begin();
-  Serial.printf("[MIC] available=%d adc=%d rate=%d mag=%d trim=%.2f gate=%d\n",
-                micAvailable, mc.use_adc, mc.sample_rate, mc.magnification,
-                static_cast<float>(INPUT_TRIM_Q10) / 1024.0f, INPUT_NOISE_GATE);
+  // I2C for MPU-6050: D4=GPIO5 (SDA), D5=GPIO6 (SCL)
+  Wire.begin(D4, D5);
+  if (!mpu.begin(0x68, &Wire)) {
+    Serial.println("[IMU] MPU-6050 not found!");
+  } else {
+    mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    Serial.println("[IMU] MPU-6050 ready");
+  }
 
-  M5.Display.setRotation(1);
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(4, 24);
-  M5.Display.println("TossTalk");
-
+  setupMic();
   setupBle();
-  drawBatteryHud(M5.Power.getBatteryLevel(), M5.Power.isCharging());
   notifyGateState();
-  drawRuntimeStatus();
   queueMicCapture();
 }
 
 void loop() {
   const uint32_t now = millis();
 
-  // During the settling window after BLE connect, do NOTHING except yield
-  // CPU.  The ESP32-PICO is single-core; the NimBLE host task needs every
-  // spare cycle to handle service discovery, characteristic resolution,
-  // and CCCD writes from the browser.
+  // During the settling window after BLE connect, yield CPU so the
+  // NimBLE host task can handle service discovery unimpeded.
   const bool settling = bleClientConnected &&
                         (now - bleConnectedAtMs < BLE_SETTLING_MS);
   if (settling) {
@@ -708,22 +693,9 @@ void loop() {
   }
 
   // IMU must be polled every loop iteration — a throw is only ~300ms
-  // and the freefall window can be <100ms.  IMU read is a fast I2C
-  // transaction (~200us), not a heavy SPI display write.
-  M5.Imu.update();         // refresh accelerometer data
+  // and the freefall window can be <100ms.
   updateGateState();
-
-  // Battery + display are expensive (SPI).  Throttle while streaming.
-  if (!streaming || (now - lastHeavyIoMs >= HEAVY_IO_INTERVAL_MS)) {
-    lastHeavyIoMs = now;
-    M5.update();           // buttons, power
-    updateBattery();
-    if (displayDirty) {
-      displayDirty = false;
-      drawRuntimeStatus();
-    }
-  }
-
+  updateBattery();
   sendMicAudioFrame();
 
   // Periodic diagnostics (every 5s)

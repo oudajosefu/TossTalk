@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     paths:
-      - 'web/**'
-      - 'firmware/**'
-      - 'scripts/**'
-      - '.github/workflows/pages.yml'
+      - "web/**"
+      - "firmware/**"
+      - "scripts/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install build tools
         run: pip install platformio esptool
@@ -42,7 +42,7 @@ jobs:
       - name: Merge firmware image for web flashing
         run: |
           python scripts/merge_firmware.py \
-            --env-dir firmware/.pio/build/m5stick-c-plus2 \
+            --env-dir firmware/.pio/build/xiao-esp32s3 \
             --out web/firmware/tosstalk-merged.bin
 
       - name: Write firmware metadata
