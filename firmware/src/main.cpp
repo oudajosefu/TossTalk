@@ -376,21 +376,39 @@ void encodeNewFrame() {
       samples[i] = static_cast<int16_t>(s);
     }
 
-    // ── Noise gate (on raw-level samples, before gain) ────────────────
-    // Hard-zero below half-threshold, squared fade up to threshold.
-    static constexpr int32_t GATE_KNEE = INPUT_NOISE_GATE / 2;  // 12
+    // ── Frame-level noise gate (on raw-level samples, before gain) ───
+    // Compute frame RMS, then apply gain envelope to the whole frame.
+    // This avoids per-sample gating which creates high-freq impulse artifacts.
+    static constexpr int32_t GATE_CLOSE = INPUT_NOISE_GATE / 2;  // 12
+    static constexpr int32_t GATE_OPEN  = INPUT_NOISE_GATE;      // 24
+    int64_t sumSq = 0;
     for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
       int32_t s = static_cast<int32_t>(samples[i]);
-      int32_t mag = std::abs(s);
-      if (mag < GATE_KNEE) {
-        s = 0;
-      } else if (mag < INPUT_NOISE_GATE) {
-        int32_t range = INPUT_NOISE_GATE - GATE_KNEE;
-        int32_t above = mag - GATE_KNEE;
-        s = (s * above * above) / (range * range);
-      }
-      samples[i] = static_cast<int16_t>(s);
+      sumSq += s * s;
     }
+    int32_t frameRms = 0;
+    {
+      // Integer sqrt of (sumSq / AUDIO_SAMPLE_COUNT)
+      int64_t meanSq = sumSq / AUDIO_SAMPLE_COUNT;
+      int32_t r = 0;
+      if (meanSq > 0) { r = 1; while (static_cast<int64_t>(r) * r < meanSq) ++r; if (static_cast<int64_t>(r) * r > meanSq) --r; }
+      frameRms = r;
+    }
+    if (frameRms < GATE_CLOSE) {
+      // Fully closed — zero the whole frame
+      memset(samples, 0, sizeof(int16_t) * AUDIO_SAMPLE_COUNT);
+    } else if (frameRms < GATE_OPEN) {
+      // Transition zone — scale entire frame with squared fade
+      int32_t range = GATE_OPEN - GATE_CLOSE;
+      int32_t above = frameRms - GATE_CLOSE;
+      // scaleQ12 ramps from 0 at GATE_CLOSE to 4096 at GATE_OPEN (quadratic)
+      int32_t scaleQ12 = (4096 * above * above) / (range * range);
+      for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
+        int32_t s = (static_cast<int32_t>(samples[i]) * scaleQ12) >> 12;
+        samples[i] = static_cast<int16_t>(s);
+      }
+    }
+    // else: frameRms >= GATE_OPEN — pass through unmodified
 
     // ── Unified gain + soft limiter (no clipping possible) ────────────
     // Compute raw peak, then cap the gain so output never exceeds the
