@@ -21,21 +21,29 @@ Notes:
 - Flashing uses reliability-first settings in browser flow (`compress: false`).
 - Stub handling is left to the loader connection flow to avoid duplicate-stub issues.
 - Browser flow writes firmware using `flashBegin` / `flashBlock` / `flashFinish` APIs
-	instead of the high-level `writeFlash` helper for better compatibility.
+  instead of the high-level `writeFlash` helper for better compatibility.
 
 ## Firmware input expectations
 
 - Preferred: merged firmware image (`address = 0x0`)
 - Alternative: custom address + matching binary image
 - UI supports:
-	- hosted firmware URL
-	- local firmware file chooser
+  - hosted firmware URL
+  - local firmware file chooser
 
 Default hosted URL in deployed app:
 
 - `./firmware/tosstalk-merged.bin`
 
 This file is generated and published automatically by the Pages workflow.
+
+For local development, you must regenerate the merged binary after any firmware change:
+
+```bash
+uv run python scripts/merge_firmware.py \
+  --env-dir firmware/.pio/build/xiao-esp32s3 \
+  --out web/firmware/tosstalk-merged.bin
+```
 
 ## Compatibility
 

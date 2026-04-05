@@ -47,14 +47,43 @@ This file is generated automatically by GitHub Actions during deployment.
 
 ## For developers
 
+### Python environment (uv)
+
+This project uses [uv](https://docs.astral.sh/uv/) as the recommended Python package manager. It is not strictly required — standard `pip` and `python` commands will also work — but `uv` provides faster installs and deterministic virtual environments.
+
+```bash
+# Install uv (if not already installed)
+# See https://docs.astral.sh/uv/getting-started/installation/ for other methods
+pip install uv
+
+# Create a virtual environment in the repo root
+uv venv
+
+# Install Python dependencies (PlatformIO, esptool, bridge requirements)
+uv run pip install platformio esptool
+uv run pip install -r bridge/requirements.txt
+```
+
 ### Local firmware build
 
 1. Open [firmware/platformio.ini](firmware/platformio.ini)
 2. Build/upload with PlatformIO
 
+> **Important:** After any firmware change that would require re-flashing the device, you must also re-run the merge script so the web UI uses the most up-to-date firmware:
+>
+> ```bash
+> uv run python scripts/merge_firmware.py \
+>   --env-dir firmware/.pio/build/xiao-esp32s3 \
+>   --out web/firmware/tosstalk-merged.bin
+> ```
+
 ### Local web testing
 
-Serve [web](web) with any static server and open in desktop Chromium.
+Serve [web](web) with any static server and open in desktop Chromium:
+
+```bash
+uv run python -m http.server -d web 8080
+```
 
 ### Deployment
 

@@ -8,29 +8,45 @@ TossTalk is a tossable wireless microphone built on the Seeed Studio XIAO ESP32 
 
 Two components: **firmware** (C++/PlatformIO) and **web app** (vanilla JavaScript PWA, no build step).
 
+## Python Environment (uv)
+
+This project uses [uv](https://docs.astral.sh/uv/) as the recommended Python package manager. It is not strictly required — standard `pip` and `python` commands will also work — but `uv` provides faster installs and deterministic virtual environments.
+
+```bash
+# Install uv (if not already installed)
+# See https://docs.astral.sh/uv/getting-started/installation/ for other methods
+pip install uv # Or use scoop: `scoop install uv`
+
+# Create a virtual environment in the repo root
+uv venv
+
+# Install Python dependencies (PlatformIO, esptool, bridge requirements)
+uv run pip install platformio esptool
+uv run pip install -r bridge/requirements.txt
+```
+
 ## Build Commands
 
 ### Firmware
 
 ```bash
-# Install tools
-pip install platformio esptool
-
 # Build firmware (from repo root)
 cd firmware && pio run
 
 # Create merged binary for web-serial flashing
-python scripts/merge_firmware.py \
+uv run python scripts/merge_firmware.py \
   --env-dir firmware/.pio/build/xiao-esp32s3 \
   --out web/firmware/tosstalk-merged.bin
 ```
+
+> **Important:** After any firmware change that would require re-flashing the device, you must also re-run the merge script above so that the web UI uses the most up-to-date firmware matching your development environment.
 
 ### Web App
 
 No build step. Serve the `web/` directory with any static HTTP server:
 
 ```bash
-python -m http.server -d web 8080
+uv run python -m http.server -d web 8080
 ```
 
 Requires desktop Chromium (Chrome or Edge) for Web Bluetooth and Web Serial APIs.

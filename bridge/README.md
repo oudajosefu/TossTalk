@@ -30,6 +30,12 @@ Download `tosstalk-bridge.exe` from the latest release and run it. No Python req
 
 ```bash
 cd bridge
+
+# Using uv (recommended)
+uv run pip install -r requirements.txt
+uv run python -m bridge.main
+
+# Or using standard pip/python
 pip install -r requirements.txt
 python -m bridge.main
 ```
@@ -44,7 +50,7 @@ python -m bridge.main
    tosstalk-bridge.exe
 
    # Or from source
-   python -m bridge.main
+   uv run python -m bridge.main
    ```
 
 3. The bridge will scan for the TossTalk device, connect, and start streaming audio.
