@@ -15,10 +15,9 @@ Transitions are IMU-driven and biased toward fast talk recovery.
 
 ## Core components
 
-- Firmware (M5StickC Plus2)
+- Firmware (XIAO ESP32 S3 Sense + MPU-6050)
   - IMU classifier (airborne/impact/recovery)
   - Audio capture + BLE uplink (near-live)
-  - Battery HUD (always visible)
   - Auto-recover and reconnect loops
 - Web PWA (desktop Chromium)
   - Web Bluetooth receiver

@@ -33,7 +33,7 @@ def find_boot_app0() -> pathlib.Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Merge ESP32 firmware binaries into one flashable image"
+        description="Merge ESP32-S3 firmware binaries into one flashable image"
     )
     parser.add_argument(
         "--env-dir",
@@ -42,8 +42,8 @@ def main() -> int:
     )
     parser.add_argument("--out", required=True, help="Output merged bin path")
     parser.add_argument("--flash-mode", default="dio")
-    parser.add_argument("--flash-freq", default="40m")
-    parser.add_argument("--flash-size", default="4MB")
+    parser.add_argument("--flash-freq", default="80m")
+    parser.add_argument("--flash-size", default="8MB")
     args = parser.parse_args()
 
     env_dir = pathlib.Path(args.env_dir)
@@ -66,14 +66,14 @@ def main() -> int:
         "esptool",
         "--chip",
         "esp32s3",
-        "merge_bin",
+        "merge-bin",
         "-o",
         str(out_path),
-        "--flash_mode",
+        "--flash-mode",
         args.flash_mode,
-        "--flash_freq",
+        "--flash-freq",
         args.flash_freq,
-        "--flash_size",
+        "--flash-size",
         args.flash_size,
         "0x0000",
         str(bootloader),

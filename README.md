@@ -1,10 +1,10 @@
 # TossTalk
 
-TossTalk is a tossable wireless microphone built on the M5StickC Plus2.
+TossTalk is a tossable wireless microphone built on the Seeed Studio XIAO ESP32 S3 Sense with an external GY-521 MPU-6050 IMU.
 
 Power it on, pair it, and pass it around whenever a group needs one shared mic.
 
-Build guide: [TossTalk on Instructables](https://www.instructables.com/TossTalk-Build-an-Inexpensive-Tossable-Rollable-Wi/)
+Original build guide (M5StickC Plus2 version): [TossTalk on Instructables](https://www.instructables.com/TossTalk-Build-an-Inexpensive-Tossable-Rollable-Wi/)
 
 ## What it does
 
@@ -12,13 +12,12 @@ Build guide: [TossTalk on Instructables](https://www.instructables.com/TossTalk-
 - Recovers quickly so the next speaker can talk right after catching it
 - Streams audio to a web app over BLE
 - Plays audio through connected speakers
-- Shows remaining battery on the device screen
 - Supports browser-based firmware updates without the Arduino IDE
 
 ## Quick start
 
 1. Power on TossTalk
-2. Open the TossTalk web page in Chrome or Edge (desktop) at [kevinl95.github.io/TossTalk](https://kevinl95.github.io/TossTalk/)
+2. Open the TossTalk web page in Chrome or Edge (desktop) at [oudajosefu.github.io/TossTalk](https://oudajosefu.github.io/TossTalk/)
 3. Connect the device
 4. Pass or toss the mic to whoever needs to speak
 
