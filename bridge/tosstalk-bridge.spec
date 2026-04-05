@@ -7,8 +7,8 @@ from pathlib import Path
 block_cipher = None
 
 a = Analysis(
-    ['bridge/main.py'],
-    pathex=[],
+    ['main.py'],
+    pathex=[str(Path(SPECPATH))],  # ensure sibling modules are found
     binaries=[],
     datas=[],
     hiddenimports=[

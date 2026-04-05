@@ -10,7 +10,10 @@ import numpy as np
 from bleak import BleakClient, BleakScanner
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from . import adpcm
+try:
+    from . import adpcm
+except ImportError:
+    import adpcm
 
 log = logging.getLogger(__name__)
 

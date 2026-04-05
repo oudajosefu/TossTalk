@@ -21,8 +21,12 @@ if sys.platform == "win32":
 
 import numpy as np
 
-from .audio_output import AudioOutput, find_vb_cable_device, list_output_devices
-from .ble_client import TossTalkBleClient
+try:
+    from .audio_output import AudioOutput, find_vb_cable_device, list_output_devices
+    from .ble_client import TossTalkBleClient
+except ImportError:
+    from audio_output import AudioOutput, find_vb_cable_device, list_output_devices
+    from ble_client import TossTalkBleClient
 
 
 def parse_args() -> argparse.Namespace:
