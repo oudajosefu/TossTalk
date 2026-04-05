@@ -1,0 +1,4 @@
+bleak>=0.21
+sounddevice>=0.4
+scipy>=1.10
+numpy>=1.24
