@@ -110,9 +110,9 @@ static constexpr uint32_t BLE_SETTLING_MS = 3500;
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
 static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
 static constexpr size_t   MIC_RING_SIZE      = 4;
-static constexpr int32_t  MIC_TARGET_GAIN_Q12 = 32768; // 8.0× in Q12 (desired amplification)
-static constexpr int16_t  INPUT_NOISE_GATE   = 200;    // frame-RMS gate threshold (raw-mic units, pre-gain)
-static constexpr int16_t  INPUT_SOFT_LIMIT   = 24000;  // peak output ceiling after gain
+static constexpr int32_t  MIC_TARGET_GAIN_Q12 = 20480; // 5.0× in Q12 (desired amplification)
+static constexpr int16_t  INPUT_NOISE_GATE   = 225;    // frame-RMS gate threshold (raw-mic units, pre-gain)
+static constexpr int16_t  INPUT_SOFT_LIMIT   = 18000;  // peak output ceiling after gain
 static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
 static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK
 static constexpr int        I2S_DATA_PIN = 41;  // XIAO S3 Sense PDM DATA
@@ -127,7 +127,7 @@ struct AdpcmState { int predictor = 0; int index = 0; };
 AdpcmState adpcmState;
 
 // ── Audio processing state (persists between frames) ─────────────────────
-static int32_t prevLimiterScaleQ12 = 32768; // start at target gain (8.0× in Q12)
+static int32_t prevLimiterScaleQ12 = 20480; // start at target gain (5.0× in Q12)
 static int32_t dcEst = 0;                   // DC offset estimate (sample units)
 
 static const int kIndexTable[16] = {
@@ -419,7 +419,7 @@ void encodeNewFrame() {
       if (a > rawPeak) rawPeak = a;
     }
 
-    // Desired gain = MIC_TARGET_GAIN_Q12 (8.0× = 32768 in Q12)
+    // Desired gain = MIC_TARGET_GAIN_Q12 (5.0× = 20480 in Q12)
     // If that would push the peak above INPUT_SOFT_LIMIT, reduce gain.
     int32_t targetGainQ12 = MIC_TARGET_GAIN_Q12;
     if (rawPeak > 0) {
