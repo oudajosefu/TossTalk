@@ -112,7 +112,7 @@ static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
 static constexpr size_t   MIC_RING_SIZE      = 4;
 // Tunable audio params — defaults here, adjustable at runtime via BLE
 static int32_t micTargetGainQ12 = 20480; // 5.0× in Q12 (desired amplification)
-static int16_t inputNoiseGate   = 225;   // frame-RMS gate threshold (raw-mic units, pre-gain)
+static int16_t inputNoiseGate   = 216;   // frame-RMS gate threshold (raw-mic units, pre-gain)
 static int16_t inputSoftLimit   = 18000; // peak output ceiling after gain
 static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
 static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK

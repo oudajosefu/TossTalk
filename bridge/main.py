@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         "--noise-gate",
         type=int,
         default=None,
-        help="Noise gate threshold (0-2000, default: firmware default 225)",
+        help="Noise gate threshold (0-2000, default: firmware default 216)",
     )
     p.add_argument(
         "--soft-limit",
@@ -199,7 +199,7 @@ def main() -> None:
         or args.soft_limit is not None
     ):
         gain_q12 = round((args.gain if args.gain is not None else 5.0) * 4096)
-        noise_gate = args.noise_gate if args.noise_gate is not None else 225
+        noise_gate = args.noise_gate if args.noise_gate is not None else 216
         soft_limit = args.soft_limit if args.soft_limit is not None else 18000
         audio_config = (gain_q12, noise_gate, soft_limit)
         print(

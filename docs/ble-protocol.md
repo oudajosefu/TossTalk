@@ -63,7 +63,7 @@ Variable-length. The first byte determines the command type.
 | ------ | ------ | ---------- | ---------- | ------- | ---------------------------------- |
 | 0      | u8     | cmd        | `0x01`     |         | Command ID                         |
 | 1..4   | i32 LE | gain_q12   | 0–81920    | 20480   | Target gain in Q12 (÷4096 = ×mult) |
-| 5..6   | i16 LE | noise_gate | 0–2000     | 225     | Frame-RMS gate threshold           |
+| 5..6   | i16 LE | noise_gate | 0–2000     | 216     | Frame-RMS gate threshold           |
 | 7..8   | i16 LE | soft_limit | 1000–32767 | 18000   | Peak output ceiling after gain     |
 
 Values are clamped to their valid ranges by the firmware. Changes take effect immediately but do not persist across reboots.
