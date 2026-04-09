@@ -62,6 +62,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable debug logging",
     )
+    p.add_argument(
+        "--gain",
+        type=float,
+        default=None,
+        help="Mic gain multiplier (0.0-20.0, default: firmware default 5.0)",
+    )
+    p.add_argument(
+        "--noise-gate",
+        type=int,
+        default=None,
+        help="Noise gate threshold (0-2000, default: firmware default 225)",
+    )
+    p.add_argument(
+        "--soft-limit",
+        type=int,
+        default=None,
+        help="Soft limiter ceiling (1000-32767, default: firmware default 18000)",
+    )
     return p.parse_args()
 
 
@@ -173,6 +191,22 @@ def main() -> None:
         device_name=args.device_name,
     )
 
+    # Build audio config if any tuning args were given
+    audio_config = None
+    if (
+        args.gain is not None
+        or args.noise_gate is not None
+        or args.soft_limit is not None
+    ):
+        gain_q12 = round((args.gain if args.gain is not None else 5.0) * 4096)
+        noise_gate = args.noise_gate if args.noise_gate is not None else 225
+        soft_limit = args.soft_limit if args.soft_limit is not None else 18000
+        audio_config = (gain_q12, noise_gate, soft_limit)
+        print(
+            f"Audio tuning: gain={args.gain if args.gain is not None else 5.0:.1f}x "
+            f"gate={noise_gate} limit={soft_limit}"
+        )
+
     async def run_bridge() -> None:
         """Async entry point — runs BLE client with clean shutdown on Ctrl+C."""
         # Start audio output inside the async context so that PortAudio's
@@ -191,8 +225,33 @@ def main() -> None:
         else:
             loop.add_signal_handler(signal.SIGINT, stop_event.set)
 
-        # Run BLE client and stop_event concurrently; first to finish wins
-        ble_task = asyncio.create_task(ble_client.run())
+        # Send audio config once after first successful connect
+        async def run_with_config() -> None:
+            config_sent = False
+            ble_client._running = True
+            backoff = 1.0
+            while ble_client._running:
+                if not ble_client.is_connected:
+                    ok = await ble_client.connect()
+                    if not ok:
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 30.0)
+                        continue
+                    backoff = 1.0
+                    if audio_config and not config_sent:
+                        await asyncio.sleep(0.5)  # let firmware finish settling
+                        await ble_client.send_audio_config(*audio_config)
+                        config_sent = True
+                while ble_client._running and ble_client.is_connected:
+                    await asyncio.sleep(0.5)
+                if ble_client._running:
+                    ble_client._reset_assembly()
+                    await asyncio.sleep(1.0)
+
+        if audio_config:
+            ble_task = asyncio.create_task(run_with_config())
+        else:
+            ble_task = asyncio.create_task(ble_client.run())
         stop_task = asyncio.create_task(stop_event.wait())
         await asyncio.wait([ble_task, stop_task], return_when=asyncio.FIRST_COMPLETED)
         ble_client.stop()

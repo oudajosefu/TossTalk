@@ -22,6 +22,7 @@ SERVICE_UUID = "9f8d0001-6b7b-4f26-b10f-3aa861aa0001"
 AUDIO_CHAR_UUID = "9f8d0002-6b7b-4f26-b10f-3aa861aa0001"
 BATT_CHAR_UUID = "9f8d0003-6b7b-4f26-b10f-3aa861aa0001"
 STATE_CHAR_UUID = "9f8d0004-6b7b-4f26-b10f-3aa861aa0001"
+CONTROL_CHAR_UUID = "9f8d0005-6b7b-4f26-b10f-3aa861aa0001"
 
 # ── Audio constants ───────────────────────────────────────────────────────
 SAMPLE_COUNT = 160
@@ -190,6 +191,34 @@ class TossTalkBleClient:
     @property
     def is_connected(self) -> bool:
         return self._client is not None and self._client.is_connected
+
+    async def send_audio_config(
+        self, gain_q12: int, noise_gate: int, soft_limit: int
+    ) -> bool:
+        """Send audio tuning parameters to the device via the Control characteristic."""
+        if not self.is_connected or self._client is None:
+            log.warning("Cannot send audio config: not connected")
+            return False
+        gain_q12 = max(0, min(81920, gain_q12))
+        noise_gate = max(0, min(2000, noise_gate))
+        soft_limit = max(1000, min(32767, soft_limit))
+        payload = struct.pack("<Bih", 0x01, gain_q12, noise_gate) + struct.pack(
+            "<h", soft_limit
+        )
+        try:
+            await self._client.write_gatt_char(
+                CONTROL_CHAR_UUID, payload, response=False
+            )
+            log.info(
+                "Audio config sent: gain=%.1fx gate=%d limit=%d",
+                gain_q12 / 4096.0,
+                noise_gate,
+                soft_limit,
+            )
+            return True
+        except Exception as e:
+            log.error("Failed to send audio config: %s", e)
+            return False
 
     # ── Main run loop with auto-reconnect ─────────────────────────────────
 
