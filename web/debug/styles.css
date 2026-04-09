@@ -1,6 +1,12 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
 }
 
 body {
@@ -53,8 +59,8 @@ button {
   cursor: pointer;
 }
 
-input[type='text'],
-input[type='file'] {
+input[type="text"],
+input[type="file"] {
   display: block;
   width: 100%;
   margin-top: 6px;
@@ -70,6 +76,18 @@ input[type='file'] {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.tuning-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.tuning-grid input[type="range"] {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
 }
 
 .checkline {
@@ -103,6 +121,10 @@ button:hover {
   }
 
   .flash-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tuning-grid {
     grid-template-columns: 1fr;
   }
 }

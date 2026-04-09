@@ -57,6 +57,32 @@
       </section>
 
       <section class="panel">
+        <h2>Mic Tuning</h2>
+        <p class="sub">Adjust audio parameters in real-time. Changes are not persisted across device reboots.</p>
+        <div class="tuning-grid">
+          <label>
+            Gain (<span id="gainVal">5.0</span>×)
+            <input id="gainSlider" type="range" min="0" max="200" value="50" step="1" />
+          </label>
+          <label>
+            Noise Gate (<span id="gateVal">225</span>)
+            <input id="gateSlider" type="range" min="0" max="2000" value="225" step="1" />
+          </label>
+          <label>
+            Soft Limit (<span id="limitVal">18000</span>)
+            <input id="limitSlider" type="range" min="1000" max="32767" value="18000" step="100" />
+          </label>
+        </div>
+        <div style="margin-top:12px">
+          <button id="applyTuningBtn">Apply</button>
+          <label class="checkline" style="display:inline-flex;margin-top:0;margin-left:12px">
+            <input id="autoSend" type="checkbox" />
+            Auto-send on change
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Flashing</h2>
         <p class="sub">Chromium desktop only. Use either a hosted merged firmware binary URL or choose a local .bin file.
           After flashing, press the RESET button on the device before reconnecting.</p>

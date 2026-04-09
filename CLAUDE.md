@@ -34,7 +34,7 @@ uv run pip install -r bridge/requirements.txt
 cd firmware && pio run
 
 # Create merged binary for web-serial flashing
-uv run python scripts/merge_firmware.py \
+cd .. && uv run python scripts/merge_firmware.py \
   --env-dir firmware/.pio/build/xiao-esp32s3 \
   --out web/firmware/tosstalk-merged.bin
 ```

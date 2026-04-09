@@ -6,6 +6,7 @@ import {
   stats,
   DEFAULT_FW_URL,
   jitterQueue,
+  sendAudioConfig,
 } from "../core.js";
 
 // ── DOM elements ─────────────────────────────────────────────────────────
@@ -92,3 +93,52 @@ function parseAddr(v) {
 
 updateStatsUi();
 firmwareUrlIn.value = DEFAULT_FW_URL;
+
+// ── Mic Tuning UI ─────────────────────────────────────────────────────────
+const gainSlider = document.getElementById("gainSlider");
+const gateSlider = document.getElementById("gateSlider");
+const limitSlider = document.getElementById("limitSlider");
+const gainVal = document.getElementById("gainVal");
+const gateVal = document.getElementById("gateVal");
+const limitVal = document.getElementById("limitVal");
+const applyTuningBtn = document.getElementById("applyTuningBtn");
+const autoSendIn = document.getElementById("autoSend");
+
+// Gain slider is 0–200 mapping to 0.0×–20.0× (×0.1× per step)
+function gainSliderToQ12() {
+  return Math.round(parseFloat(gainSlider.value) * 0.1 * 4096);
+}
+
+function updateGainLabel() {
+  gainVal.textContent = (parseFloat(gainSlider.value) * 0.1).toFixed(1);
+}
+
+function updateGateLabel() {
+  gateVal.textContent = gateSlider.value;
+}
+
+function updateLimitLabel() {
+  limitVal.textContent = limitSlider.value;
+}
+
+function applyTuning() {
+  const g = gainSliderToQ12();
+  const ng = parseInt(gateSlider.value, 10);
+  const sl = parseInt(limitSlider.value, 10);
+  sendAudioConfig(g, ng, sl).catch((e) => log(`Tuning: ${e.message}`));
+}
+
+gainSlider.addEventListener("input", () => {
+  updateGainLabel();
+  if (autoSendIn.checked) applyTuning();
+});
+gateSlider.addEventListener("input", () => {
+  updateGateLabel();
+  if (autoSendIn.checked) applyTuning();
+});
+limitSlider.addEventListener("input", () => {
+  updateLimitLabel();
+  if (autoSendIn.checked) applyTuning();
+});
+
+applyTuningBtn.addEventListener("click", applyTuning);

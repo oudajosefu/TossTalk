@@ -6,6 +6,7 @@ const SERVICE_UUID = "9f8d0001-6b7b-4f26-b10f-3aa861aa0001";
 const AUDIO_CHAR_UUID = "9f8d0002-6b7b-4f26-b10f-3aa861aa0001";
 const BATT_CHAR_UUID = "9f8d0003-6b7b-4f26-b10f-3aa861aa0001";
 const STATE_CHAR_UUID = "9f8d0004-6b7b-4f26-b10f-3aa861aa0001";
+const CONTROL_CHAR_UUID = "9f8d0005-6b7b-4f26-b10f-3aa861aa0001";
 
 // ── Audio constants ──────────────────────────────────────────────────────
 const SAMPLE_RATE = 8000;
@@ -59,6 +60,7 @@ const jitterQueue = [];
 let activeAudioChar = null;
 let activeBattChar = null;
 let activeStateChar = null;
+let activeControlChar = null;
 let activeDisconnectDevice = null;
 let activeDisconnectHandler = null;
 
@@ -610,6 +612,19 @@ export async function connectBle() {
       "Characteristics",
     );
 
+    // Control characteristic (write-only) — optional, best-effort
+    let controlChar = null;
+    try {
+      controlChar = await withTimeout(
+        service.getCharacteristic(CONTROL_CHAR_UUID),
+        4000,
+        "Control char",
+      );
+      emit("log", "Control characteristic available");
+    } catch {
+      emit("log", "Control characteristic not found (older firmware?)");
+    }
+
     emit("connection", "Starting notifications...");
     await withTimeout(battChar.startNotifications(), 7000, "Battery notif");
     emit("log", "Battery notifications on");
@@ -622,6 +637,7 @@ export async function connectBle() {
     activeAudioChar = audioChar;
     activeBattChar = battChar;
     activeStateChar = stateChar;
+    activeControlChar = controlChar;
     audioChar.addEventListener(
       "characteristicvaluechanged",
       handleAudioSubPacket,
@@ -712,6 +728,7 @@ function cleanupCharListeners() {
     } catch {}
     activeStateChar = null;
   }
+  activeControlChar = null;
 }
 
 // Full cleanup of BLE state — called before connecting to a new device
@@ -845,3 +862,26 @@ export async function flashFirmware({
 }
 
 export { DEFAULT_FW_URL, jitterQueue, SAMPLE_COUNT };
+
+// ── Runtime audio config (write to firmware via Control characteristic) ───
+export async function sendAudioConfig(gainQ12, noiseGate, softLimit) {
+  if (!activeControlChar) {
+    emit("log", "Control char not available");
+    return;
+  }
+  const buf = new ArrayBuffer(9);
+  const view = new DataView(buf);
+  view.setUint8(0, 0x01); // CMD_SET_AUDIO_PARAMS
+  view.setInt32(1, gainQ12, true); // gain_q12 LE
+  view.setInt16(5, noiseGate, true); // noise_gate LE
+  view.setInt16(7, softLimit, true); // soft_limit LE
+  try {
+    await activeControlChar.writeValueWithoutResponse(buf);
+    emit(
+      "log",
+      `Audio config sent: gain=${(gainQ12 / 4096).toFixed(1)}× gate=${noiseGate} limit=${softLimit}`,
+    );
+  } catch (e) {
+    emit("log", `Audio config write failed: ${e.message}`);
+  }
+}

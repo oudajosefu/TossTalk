@@ -110,9 +110,10 @@ static constexpr uint32_t BLE_SETTLING_MS = 3500;
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
 static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
 static constexpr size_t   MIC_RING_SIZE      = 4;
-static constexpr int32_t  MIC_TARGET_GAIN_Q12 = 20480; // 5.0× in Q12 (desired amplification)
-static constexpr int16_t  INPUT_NOISE_GATE   = 225;    // frame-RMS gate threshold (raw-mic units, pre-gain)
-static constexpr int16_t  INPUT_SOFT_LIMIT   = 18000;  // peak output ceiling after gain
+// Tunable audio params — defaults here, adjustable at runtime via BLE
+static int32_t micTargetGainQ12 = 20480; // 5.0× in Q12 (desired amplification)
+static int16_t inputNoiseGate   = 225;   // frame-RMS gate threshold (raw-mic units, pre-gain)
+static int16_t inputSoftLimit   = 18000; // peak output ceiling after gain
 static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
 static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK
 static constexpr int        I2S_DATA_PIN = 41;  // XIAO S3 Sense PDM DATA
@@ -212,7 +213,33 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 class ControlCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) override {
-    if (pCharacteristic->getValue() == "ping") {
+    std::string val = pCharacteristic->getValue();
+    // Binary commands: first byte < 0x20 distinguishes from text "ping"
+    if (val.size() >= 1 && static_cast<uint8_t>(val[0]) < 0x20) {
+      const uint8_t* d = reinterpret_cast<const uint8_t*>(val.data());
+      if (d[0] == 0x01 && val.size() >= 9) {
+        // CMD_SET_AUDIO_PARAMS: [0x01][gain_q12:i32le][noise_gate:i16le][soft_limit:i16le]
+        int32_t g = static_cast<int32_t>(d[1] | (d[2]<<8) | (d[3]<<16) | (d[4]<<24));
+        int16_t ng = static_cast<int16_t>(d[5] | (d[6]<<8));
+        int16_t sl = static_cast<int16_t>(d[7] | (d[8]<<8));
+        // Validate ranges
+        if (g < 0) g = 0;
+        if (g > 81920) g = 81920;       // max 20.0×
+        if (ng < 0) ng = 0;
+        if (ng > 2000) ng = 2000;
+        if (sl < 1000) sl = 1000;
+        if (sl > 32767) sl = 32767;
+        micTargetGainQ12 = g;
+        inputNoiseGate = ng;
+        inputSoftLimit = sl;
+        prevLimiterScaleQ12 = g;  // reset limiter to new target
+        Serial.printf("[CTRL] Audio params: gain=%.1fx gate=%d limit=%d\n",
+                      static_cast<float>(g) / 4096.0f, ng, sl);
+      }
+      return;
+    }
+    // Text commands
+    if (val == "ping") {
       gateState = GateState::Reacquire;
       reacquireStartMs = millis();
       notifyGateState();
@@ -379,8 +406,8 @@ void encodeNewFrame() {
     // ── Frame-level noise gate (on raw-level samples, before gain) ───
     // Compute frame RMS, then apply gain envelope to the whole frame.
     // This avoids per-sample gating which creates high-freq impulse artifacts.
-    static constexpr int32_t GATE_CLOSE = INPUT_NOISE_GATE / 2;  // 12
-    static constexpr int32_t GATE_OPEN  = INPUT_NOISE_GATE;      // 24
+    const int32_t GATE_CLOSE = inputNoiseGate / 2;
+    const int32_t GATE_OPEN  = inputNoiseGate;
     int64_t sumSq = 0;
     for (size_t i = 0; i < AUDIO_SAMPLE_COUNT; ++i) {
       int32_t s = static_cast<int32_t>(samples[i]);
@@ -419,11 +446,11 @@ void encodeNewFrame() {
       if (a > rawPeak) rawPeak = a;
     }
 
-    // Desired gain = MIC_TARGET_GAIN_Q12 (5.0× = 20480 in Q12)
-    // If that would push the peak above INPUT_SOFT_LIMIT, reduce gain.
-    int32_t targetGainQ12 = MIC_TARGET_GAIN_Q12;
+    // Desired gain = micTargetGainQ12 (default 5.0× = 20480 in Q12)
+    // If that would push the peak above inputSoftLimit, reduce gain.
+    int32_t targetGainQ12 = micTargetGainQ12;
     if (rawPeak > 0) {
-      int32_t maxGainQ12 = (static_cast<int32_t>(INPUT_SOFT_LIMIT) << 12) / rawPeak;
+      int32_t maxGainQ12 = (static_cast<int32_t>(inputSoftLimit) << 12) / rawPeak;
       if (targetGainQ12 > maxGainQ12) targetGainQ12 = maxGainQ12;
     }
 
@@ -681,8 +708,8 @@ void setupMic() {
                   i2s_set_pin(I2S_PORT, &pin_cfg) == ESP_OK);
   Serial.printf("[MIC] I2S PDM available=%d rate=%d gain=%.1fx gate=%d limit=%d\n",
                 micAvailable, AUDIO_SAMPLE_RATE,
-                static_cast<float>(MIC_TARGET_GAIN_Q12) / 4096.0f,
-                INPUT_NOISE_GATE, INPUT_SOFT_LIMIT);
+                static_cast<float>(micTargetGainQ12) / 4096.0f,
+                inputNoiseGate, inputSoftLimit);
 }
 
 // ── Arduino entry points ─────────────────────────────────────────────────
