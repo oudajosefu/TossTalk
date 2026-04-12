@@ -1,5 +1,5 @@
-"""Allow running the bridge as: python -m bridge"""
+"""Allow running the bridge as: python -m bridge (launches the GUI)."""
 
-from .main import main
+from .gui import main
 
 main()

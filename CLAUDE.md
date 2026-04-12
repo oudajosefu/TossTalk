@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TossTalk is a tossable wireless microphone built on the Seeed Studio XIAO ESP32 S3 Sense with an external GY-521 MPU-6050 IMU. It detects when thrown via IMU and automatically mutes throw noise, streaming audio to a browser-based web app over Bluetooth Low Energy (BLE).
 
-Two components: **firmware** (C++/PlatformIO) and **web app** (vanilla JavaScript PWA, no build step).
+Three components: **firmware** (C++/PlatformIO), **web app** (vanilla JavaScript PWA, no build step), and **bridge** (Python desktop app that pipes BLE audio into a VB-Cable virtual mic for Teams/Zoom/Discord — ships with a Tkinter GUI for live tuning plus a CLI for headless / packaged use).
 
 ## Python Environment (uv)
 
@@ -21,8 +21,8 @@ pip install uv # Or use scoop: `scoop install uv`
 uv venv
 
 # Install Python dependencies (PlatformIO, esptool, bridge requirements)
-uv run pip install platformio esptool
-uv run pip install -r bridge/requirements.txt
+uv pip install platformio esptool
+uv pip install -r bridge/requirements.txt
 ```
 
 ## Build Commands
@@ -50,6 +50,26 @@ uv run python -m http.server -d web 8080
 ```
 
 Requires desktop Chromium (Chrome or Edge) for Web Bluetooth and Web Serial APIs.
+
+### Bridge (desktop virtual mic)
+
+No build step — pure Python, stdlib Tkinter GUI (no extra deps beyond `bridge/requirements.txt`).
+
+```bash
+# Install deps once
+uv pip install -r bridge/requirements.txt
+
+# Launch the GUI (default entry point)
+uv run python -m bridge
+
+# Or the headless CLI (same entry the packaged .exe wraps)
+uv run python -m bridge.main
+
+# Package the CLI as a Windows .exe
+pyinstaller bridge/tosstalk-bridge.spec    # output: dist/tosstalk-bridge.exe
+```
+
+Requires [VB-Cable](https://vb-audio.com/Cable/) installed for the virtual mic sink, and the TossTalk web app must be disconnected since only one BLE client can bind at a time. The GUI exposes live sliders for gain / noise gate / soft limit that push to the firmware over the Control characteristic without requiring a restart.
 
 ## Architecture
 
@@ -91,6 +111,15 @@ Single monolithic file. Key subsystems:
 - **app.js**: Main UI — connection button, volume ring meter (RMS-based), gate state display, battery indicator
 - **sw.js**: Service worker, network-first caching strategy, cache version `tosstalk-v20`
 - **debug/**: Alternative UI showing raw stats (frame counts, drops, sub-packets) and advanced flashing options
+
+### Bridge (`bridge/`)
+
+- **gui.py**: Tkinter GUI (stdlib only). Runs Tk on the main thread; hosts the asyncio loop, BLE client, and `sounddevice` output on a dedicated worker thread that MTA-initializes COM first, so `bleak`'s WinRT backend and PortAudio's STA stream coexist. `BridgeWorker` exposes `connect()` / `disconnect()` / `send_config()` / `set_output_device()` that schedule coroutines via `asyncio.run_coroutine_threadsafe`; worker-side events flow back through a `queue.Queue` drained by `root.after(50, ...)`. Live sliders for gain / noise gate / soft limit call `TossTalkBleClient.send_audio_config()` on release.
+- **main.py**: CLI entry point. Same asyncio + BLE + audio pipeline, configured via argparse flags; used by the PyInstaller-packaged `tosstalk-bridge.exe`.
+- **ble_client.py**: `TossTalkBleClient` — BLE scan, connect, notifications, ADPCM sub-packet reassembly, auto-reconnect loop (`run()` blocks until `stop()`).
+- **audio_output.py**: `AudioOutput` — zero-stuff + stateful FIR resample from 8 kHz to 48 kHz, jitter-bounded deque, `sounddevice.OutputStream` to VB-Cable (or any selected output device).
+- **adpcm.py**: IMA ADPCM decoder.
+- **`__main__.py`**: Launches the GUI when you run `python -m bridge`.
 
 ### BLE Protocol
 

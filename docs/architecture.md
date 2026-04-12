@@ -24,6 +24,11 @@ Transitions are IMU-driven and biased toward fast talk recovery.
   - Audio playback pipeline
   - Device status view
   - Web Serial flashing UX
+- Desktop bridge ([bridge/](../bridge/))
+  - Python app that pipes BLE audio into a VB-Cable virtual microphone so Teams/Zoom/Discord can use TossTalk as a system mic
+  - Tkinter GUI ([bridge/gui.py](../bridge/gui.py)) with connection control, live volume meter, battery + gate indicators, and live sliders that push gain / noise-gate / soft-limit changes to the firmware over the Control characteristic (no reboot required)
+  - Headless CLI ([bridge/main.py](../bridge/main.py)) for scripted or packaged (`tosstalk-bridge.exe`) use
+  - Dev launch: `uv run python -m bridge` (GUI) or `uv run python -m bridge.main` (CLI); see [bridge/README.md](../bridge/README.md) for setup
 
 ## Reliability posture
 

@@ -42,6 +42,7 @@ This file is generated automatically by GitHub Actions during deployment.
 
 - [firmware](firmware): Device firmware (PlatformIO)
 - [web](web): Browser app (PWA + Web Bluetooth + Web Serial flashing)
+- [bridge](bridge): Desktop Python bridge that streams BLE audio into a virtual microphone (VB-Cable) so Teams/Zoom/Discord can use TossTalk as a mic. Ships with a Tkinter GUI for live tuning and a CLI for headless use.
 - [docs](docs): Architecture, protocol, milestones, test notes
 - [.github/workflows](.github/workflows): Build and deployment automation
 
@@ -60,8 +61,8 @@ pip install uv
 uv venv
 
 # Install Python dependencies (PlatformIO, esptool, bridge requirements)
-uv run pip install platformio esptool
-uv run pip install -r bridge/requirements.txt
+uv pip install platformio esptool
+uv pip install -r bridge/requirements.txt
 ```
 
 ### Local firmware build
@@ -84,6 +85,23 @@ Serve [web](web) with any static server and open in desktop Chromium:
 ```bash
 uv run python -m http.server -d web 8080
 ```
+
+### Bridge (desktop virtual-mic)
+
+The [bridge](bridge) turns TossTalk into a system microphone via VB-Cable so apps like Teams/Zoom/Discord can use it. It has a Tkinter GUI (stdlib only — no extra deps) with a live volume meter, connection status, and sliders for gain / noise gate / soft limit that push to the device over BLE while you drag.
+
+```bash
+# Install bridge Python deps (once)
+uv pip install -r bridge/requirements.txt
+
+# Launch the GUI (default)
+uv run python -m bridge
+
+# Or the headless CLI
+uv run python -m bridge.main
+```
+
+VB-Cable must be installed separately (see [bridge/README.md](bridge/README.md)) and the TossTalk web app must be disconnected, since only one BLE client can be bound at a time.
 
 ### Deployment
 
