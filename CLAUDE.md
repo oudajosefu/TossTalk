@@ -95,7 +95,8 @@ XIAO ESP32 S3 Sense + MPU-6050  Browser (Chrome/Edge)
 - **MPU-6050 (GY-521)**: 3V3→VCC, GND→GND, D4 (GPIO5)→SDA, D5 (GPIO6)→SCL
 - **PDM Microphone**: Built-in on XIAO S3 Sense (GPIO42 CLK, GPIO41 DATA)
 - **No display** — status output via Serial over USB-CDC
-- **Battery**: Stubbed at 100% (no fuel gauge); BLE characteristic preserved for protocol compatibility
+- **Battery voltage divider**: BAT+ → 100kΩ → D0 (GPIO1) → 100kΩ → GND (reads half of LiPo voltage via ADC)
+- **Charging indicator**: Onboard red LED (hardware — no firmware involvement)
 
 ### Firmware (`firmware/src/main.cpp`)
 
@@ -136,20 +137,23 @@ Full protocol spec: `docs/ble-protocol.md`
 
 ### Key Constants (firmware)
 
-| Constant           | Value              | Purpose                                    |
-| ------------------ | ------------------ | ------------------------------------------ |
-| Sample rate        | 8000 Hz            | Mic capture rate                           |
-| Frame size         | 160 samples (20ms) | Audio frame duration                       |
-| Ring buffer        | 4 frames           | Mic data queue depth                       |
-| Noise gate         | threshold 96       | Silence suppression                        |
-| Soft limiter       | peak 12000         | Adaptive compression                       |
-| Input trim         | 0.75× (Q10: 768)   | Gain reduction                             |
-| Mic magnification  | 6×                 | Capture gain (may need tuning for PDM mic) |
-| Airborne threshold | <0.35g             | Freefall detection                         |
-| Impact threshold   | >2.20g             | Catch detection                            |
-| Lockout duration   | 120ms              | Post-impact mute                           |
-| Reacquire duration | 150ms              | Recovery grace period                      |
-| BLE settle window  | 3500ms             | Post-connect service discovery delay       |
+| Constant           | Value               | Purpose                                    |
+| ------------------ | ------------------- | ------------------------------------------ |
+| Sample rate        | 8000 Hz             | Mic capture rate                           |
+| Frame size         | 160 samples (20ms)  | Audio frame duration                       |
+| Ring buffer        | 4 frames            | Mic data queue depth                       |
+| Noise gate         | threshold 96        | Silence suppression                        |
+| Soft limiter       | peak 12000          | Adaptive compression                       |
+| Input trim         | 0.75× (Q10: 768)    | Gain reduction                             |
+| Mic magnification  | 6×                  | Capture gain (may need tuning for PDM mic) |
+| Battery ADC pin    | GPIO1 (D0)          | Voltage divider mid-point                  |
+| Voltage divider    | 100kΩ / 100kΩ (2:1) | LiPo 3.0-4.2V → ADC 1.5-2.1V               |
+| Battery EMA α      | 0.10                | Smoothing filter for battery percentage    |
+| Airborne threshold | <0.35g              | Freefall detection                         |
+| Impact threshold   | >2.20g              | Catch detection                            |
+| Lockout duration   | 120ms               | Post-impact mute                           |
+| Reacquire duration | 150ms               | Recovery grace period                      |
+| BLE settle window  | 3500ms              | Post-connect service discovery delay       |
 
 ## CI/CD
 

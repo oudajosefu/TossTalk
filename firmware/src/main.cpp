@@ -68,14 +68,23 @@ NimBLECharacteristic* batteryChar = nullptr;
 NimBLECharacteristic* stateChar   = nullptr;
 NimBLECharacteristic* controlChar = nullptr;
 
+// ── Battery ADC ──────────────────────────────────────────────────────────
+static constexpr int     BATT_ADC_PIN  = 1;      // GPIO1 / D0
+static constexpr float   VDIV_RATIO    = 2.0f;   // 100kΩ / 100kΩ voltage divider
+static constexpr float   BATT_FULL_V   = 4.20f;  // LiPo fully charged
+static constexpr float   BATT_EMPTY_V  = 3.00f;  // LiPo cutoff
+
 // ── Runtime state ────────────────────────────────────────────────────────
 GateState gateState          = GateState::UnmutedLive;
 uint32_t  lockoutStartMs     = 0;
 uint32_t  reacquireStartMs   = 0;
 uint32_t  airborneStartMs    = 0;
 uint32_t  lastBatteryNotifyMs = 0;
+uint32_t  lastBatteryTickMs  = 0;
 uint32_t  lastAudioTickMs    = 0;
 uint8_t   frameSeq           = 0;
+int32_t   smoothBattX100     = -1;   // EMA accumulator ×100 (-1 = uninitialised)
+uint8_t   lastBatteryPercent = 0;
 
 bool     bleClientConnected = false;
 uint32_t bleConnectedAtMs   = 0;
@@ -299,14 +308,53 @@ void updateGateState() {
   }
 }
 
-// ── Battery (stub - no fuel gauge on XIAO S3) ───────────────────────────
+// ── Battery helpers ──────────────────────────────────────────────────────
+float readBatteryVoltage() {
+  uint32_t mv = analogReadMilliVolts(BATT_ADC_PIN);
+  return (static_cast<float>(mv) / 1000.0f) * VDIV_RATIO;
+}
+
+uint8_t voltageToPct(float v) {
+  if (v >= BATT_FULL_V)  return 100;
+  if (v <= BATT_EMPTY_V) return 0;
+  return static_cast<uint8_t>((v - BATT_EMPTY_V) / (BATT_FULL_V - BATT_EMPTY_V) * 100.0f);
+}
+
+// ── Battery (ADC via voltage divider on GPIO1/D0) ────────────────────────
 void updateBattery() {
   const uint32_t now = millis();
-  if (now - lastBatteryNotifyMs < 10000) return;
-  lastBatteryNotifyMs = now;
-  uint8_t pl[2] = {100, 0};  // 100%, not charging
-  batteryChar->setValue(pl, sizeof(pl));
-  if (canNotify()) rawNotify(batteryChar, pl, sizeof(pl));
+
+  // Read ADC at most once per second
+  if (now - lastBatteryTickMs >= 1000) {
+    lastBatteryTickMs = now;
+    float voltage = readBatteryVoltage();
+    uint8_t rawPct = voltageToPct(voltage);
+
+    // Fallback: if ADC reads < 100mV (no voltage divider wired),
+    // report 100% so the UI isn't stuck at 0%.
+    if (analogReadMilliVolts(BATT_ADC_PIN) < 100) {
+      if (smoothBattX100 == -1) {
+        Serial.println("[BATT] No voltage divider detected — reporting 100%");
+      }
+      smoothBattX100 = 100 * 100;
+    } else if (smoothBattX100 < 0) {
+      // First valid reading — seed the EMA
+      smoothBattX100 = static_cast<int32_t>(rawPct) * 100;
+    } else {
+      // EMA smoothing (α ≈ 0.10):  new = (raw * 1000 + old * 90) / 100
+      smoothBattX100 = (static_cast<int32_t>(rawPct) * 1000 + smoothBattX100 * 90) / 100;
+    }
+  }
+
+  // Notify on change or every 10 seconds
+  uint8_t pct = (smoothBattX100 < 0) ? 100 : static_cast<uint8_t>(smoothBattX100 / 100);
+  if (pct != lastBatteryPercent || (now - lastBatteryNotifyMs >= 10000)) {
+    lastBatteryPercent = pct;
+    lastBatteryNotifyMs = now;
+    uint8_t pl[2] = {pct, 0};  // charging byte stays 0 (onboard LED handles it)
+    batteryChar->setValue(pl, sizeof(pl));
+    if (canNotify()) rawNotify(batteryChar, pl, sizeof(pl));
+  }
 }
 
 // ── IMA ADPCM encoder ───────────────────────────────────────────────────
@@ -719,6 +767,9 @@ void setup() {
 
   // I2C for MPU-6050: D4=GPIO5 (SDA), D5=GPIO6 (SCL)
   Wire.begin(D4, D5);
+
+  // ADC attenuation for battery voltage divider (0-3.3V range)
+  analogSetAttenuation(ADC_11db);
   if (!mpu.begin(0x68, &Wire)) {
     Serial.println("[IMU] MPU-6050 not found!");
   } else {

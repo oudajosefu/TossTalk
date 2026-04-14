@@ -77,6 +77,14 @@ uv pip install -r bridge/requirements.txt
 >   --env-dir firmware/.pio/build/xiao-esp32s3 \
 >   --out web/firmware/tosstalk-merged.bin
 > ```
+>
+> **PowerShell version:**
+>
+> ```pwsh
+> uv run python .\scripts\merge_firmware.py `
+>   --env-dir .\firmware\.pio\build\xiao-esp32s3\ `
+>   --out .\web\firmware\tosstalk-merged.bin
+> ```
 
 ### Local web testing
 
