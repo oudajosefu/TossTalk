@@ -24,6 +24,12 @@ jobs:
           pyinstaller bridge/tosstalk-bridge.spec
           pyinstaller bridge/tosstalk-bridge-gui.spec
 
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} --generate-notes
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
