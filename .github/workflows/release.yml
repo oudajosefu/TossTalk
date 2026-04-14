@@ -1,0 +1,31 @@
+# .github/workflows/release.yml
+name: Release Bridge
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r bridge/requirements.txt
+
+      - name: Build executables
+        run: |
+          pyinstaller bridge/tosstalk-bridge.spec
+          pyinstaller bridge/tosstalk-bridge-gui.spec
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.ref_name }} dist/tosstalk-bridge.exe dist/tosstalk-bridge-gui.exe
