@@ -182,6 +182,9 @@ class BridgeWorker:
     def send_config(self, gain_q12: int, gate: int, limit: int) -> None:
         self._submit(self._send_config(gain_q12, gate, limit))
 
+    def send_sleep(self) -> None:
+        self._submit(self._send_sleep())
+
     def set_output_device(self, device_index: int) -> None:
         self._submit(self._swap_audio_device(device_index))
 
@@ -220,6 +223,14 @@ class BridgeWorker:
             self._event_queue.put(("log", "Cannot send tuning: not connected"))
             return
         await self._ble_client.send_audio_config(gain_q12, gate, limit)
+
+    async def _send_sleep(self) -> None:
+        if self._ble_client is None or not self._ble_client.is_connected:
+            self._event_queue.put(("log", "Cannot send sleep: not connected"))
+            return
+        await self._ble_client.send_sleep()
+        # Stop the auto-reconnect loop so we don't wake the device back up
+        await self._stop_ble_run()
 
     async def _swap_audio_device(self, device_index: int) -> None:
         if self._AudioOutput is None:
@@ -317,6 +328,9 @@ class BridgeGui:
         self._status_var = tk.StringVar(value="Idle")
         ttk.Label(row2, textvariable=self._status_var, foreground="#555").pack(
             side="left", padx=4
+        )
+        ttk.Button(row2, text="Power Off", command=self._on_sleep).pack(
+            side="right", padx=4
         )
         ttk.Button(row2, text="Disconnect", command=self._on_disconnect).pack(
             side="right", padx=4
@@ -475,6 +489,17 @@ class BridgeGui:
     def _on_disconnect(self) -> None:
         self._worker.disconnect()
         self._status_var.set("Stopping...")
+
+    def _on_sleep(self) -> None:
+        from tkinter import messagebox
+
+        if not messagebox.askokcancel(
+            "Power Off",
+            "Power off the microphone?\nPress the BOOT button on the device to wake it.",
+        ):
+            return
+        self._worker.send_sleep()
+        self._status_var.set("Sleep sent")
 
     def _on_apply_device(self) -> None:
         sel = self._device_combo.current()

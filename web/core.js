@@ -885,3 +885,21 @@ export async function sendAudioConfig(gainQ12, noiseGate, softLimit) {
     emit("log", `Audio config write failed: ${e.message}`);
   }
 }
+
+// ── Sleep command (deep-sleep / power-off the device) ────────────────────
+export async function sendSleep() {
+  if (!activeControlChar) {
+    emit("log", "Control char not available");
+    return;
+  }
+  const buf = new ArrayBuffer(1);
+  new DataView(buf).setUint8(0, 0x02); // CMD_SLEEP
+  try {
+    await activeControlChar.writeValueWithoutResponse(buf);
+    emit("log", "Sleep command sent — device will power off");
+  } catch (e) {
+    emit("log", `Sleep command failed: ${e.message}`);
+  }
+  // Clean up so we don't try to auto-reconnect and wake the device
+  cleanupBle();
+}

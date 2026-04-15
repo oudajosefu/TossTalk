@@ -7,11 +7,13 @@ import {
   DEFAULT_FW_URL,
   jitterQueue,
   sendAudioConfig,
+  sendSleep,
 } from "../core.js";
 
 // ── DOM elements ─────────────────────────────────────────────────────────
 const connectBtn = document.getElementById("connectBtn");
 const flashBtn = document.getElementById("flashBtn");
+const sleepBtn = document.getElementById("sleepBtn");
 const connState = document.getElementById("connState");
 const gateStateEl = document.getElementById("gateState");
 const batteryEl = document.getElementById("battery");
@@ -46,6 +48,7 @@ on("log", log);
 on("stats", updateStatsUi);
 on("connection", (state) => {
   connState.textContent = state;
+  sleepBtn.disabled = state !== "Connected";
 });
 on("battery", (pct, chrg) => {
   batteryEl.textContent = `${pct}%${chrg ? " (charging)" : ""}`;
@@ -64,6 +67,16 @@ on("flashStatus", (msg) => {
 // ── Button handlers ──────────────────────────────────────────────────────
 connectBtn.addEventListener("click", () => {
   connectBle().catch((e) => log(`Connect: ${e.message}`));
+});
+
+sleepBtn.addEventListener("click", () => {
+  if (
+    !confirm(
+      "Power off the microphone?\nPress the BOOT button on the device to wake it.",
+    )
+  )
+    return;
+  sendSleep().catch((e) => log(`Sleep: ${e.message}`));
 });
 
 flashBtn.addEventListener("click", async () => {

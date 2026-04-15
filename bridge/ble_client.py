@@ -220,6 +220,22 @@ class TossTalkBleClient:
             log.error("Failed to send audio config: %s", e)
             return False
 
+    async def send_sleep(self) -> bool:
+        """Send the sleep (power off) command to the device."""
+        if not self.is_connected or self._client is None:
+            log.warning("Cannot send sleep command: not connected")
+            return False
+        payload = struct.pack("<B", 0x02)
+        try:
+            await self._client.write_gatt_char(
+                CONTROL_CHAR_UUID, payload, response=False
+            )
+            log.info("Sleep command sent — device will enter deep sleep")
+            return True
+        except Exception as e:
+            log.error("Failed to send sleep command: %s", e)
+            return False
+
     # ── Main run loop with auto-reconnect ─────────────────────────────────
 
     async def run(self) -> None:

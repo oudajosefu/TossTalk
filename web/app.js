@@ -5,6 +5,7 @@ import {
   on,
   stats,
   DEFAULT_FW_URL,
+  sendSleep,
 } from "./core.js";
 
 // ── DOM refs ─────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ const batteryEl = document.getElementById("battery");
 const flashBtn = document.getElementById("flashBtn");
 const flashProgress = document.getElementById("flashProgress");
 const flashStatus = document.getElementById("flashStatus");
+const sleepBtn = document.getElementById("sleepBtn");
 
 // ── Volume meter state ───────────────────────────────────────────────────
 const CIRC = 2 * Math.PI * 65; // circumference of the SVG circle
@@ -45,11 +47,13 @@ on("connection", (state) => {
     connectBtn.classList.add("connected");
     statusDot.classList.add("live");
     volumeCard.style.display = "";
+    if (sleepBtn) sleepBtn.disabled = false;
   } else if (state === "Disconnected" || state === "Connect failed") {
     connected = false;
     connectBtn.textContent = "Connect Microphone";
     connectBtn.classList.remove("connected");
     volumeCard.style.display = "none";
+    if (sleepBtn) sleepBtn.disabled = true;
     gateStateEl.textContent = "—";
     batteryEl.textContent = "—";
     if (state === "Connect failed") statusDot.classList.add("error");
@@ -167,6 +171,18 @@ window.addEventListener("unhandledrejection", () => {
 connectBtn.addEventListener("click", () => {
   connectBle().catch(() => {});
 });
+
+if (sleepBtn) {
+  sleepBtn.addEventListener("click", () => {
+    if (
+      confirm(
+        "Power off the microphone? Press the BOOT button on the device to wake it.",
+      )
+    ) {
+      sendSleep().catch(() => {});
+    }
+  });
+}
 
 flashBtn.addEventListener("click", async () => {
   flashBtn.disabled = true;

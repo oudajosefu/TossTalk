@@ -67,3 +67,17 @@ Variable-length. The first byte determines the command type.
 | 7..8   | i16 LE | soft_limit | 1000–32767 | 18000   | Peak output ceiling after gain     |
 
 Values are clamped to their valid ranges by the firmware. Changes take effect immediately but do not persist across reboots.
+
+**`0x02` — Sleep (Power Off)** (1 byte)
+
+| Offset | Type | Field | Value  | Description |
+| ------ | ---- | ----- | ------ | ----------- |
+| 0      | u8   | cmd   | `0x02` | Command ID  |
+
+The device acknowledges via BLE (100 ms grace period), then enters ESP32-S3 deep sleep (~14 μA). All peripherals (BLE, I2S, I2C) are shut down and RAM is lost — waking is equivalent to a full reboot.
+
+**Wake sources:**
+
+- **BOOT button** (GPIO0, ext0 LOW) — press to wake immediately.
+
+**Inactivity auto-sleep:** If no BLE client is connected for 10 continuous minutes the device enters deep sleep automatically (no command required).

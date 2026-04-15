@@ -34,6 +34,8 @@
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <cmath>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 
 // Forward-declare the NimBLE C function we need for setting a random address.
 // The header (host/ble_hs_id.h) isn't on the NimBLE-Arduino 1.4.x include
@@ -115,6 +117,10 @@ uint16_t consecFail     = 0;   // consecutive rawNotify failures
 // can handle service discovery unimpeded.
 static constexpr uint32_t BLE_SETTLING_MS = 3500;
 
+// Inactivity sleep: enter deep sleep after this many ms with no BLE connection.
+static constexpr uint32_t IDLE_SLEEP_MS = 600000;  // 10 minutes
+uint32_t lastActivityMs = 0;  // reset on BLE connect, command receive, boot
+
 // ── Audio capture ────────────────────────────────────────────────────────
 static constexpr uint16_t AUDIO_SAMPLE_RATE  = 8000;
 static constexpr uint16_t AUDIO_SAMPLE_COUNT = 160;
@@ -194,6 +200,35 @@ const char* gateStateName(GateState s) {
   return "?";
 }
 
+// ── Deep sleep (software power-off) ─────────────────────────────────────
+void enterDeepSleep() {
+  Serial.println("[POWER] Entering deep sleep...");
+  Serial.flush();
+
+  // Tear down active peripherals
+  if (micAvailable) i2s_driver_uninstall(I2S_PORT);
+  NimBLEDevice::deinit(true);
+
+  // Configure BOOT button (GPIO0) as ext0 wake source.
+  // Button press pulls GPIO0 LOW, so wake on level 0.
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+  rtc_gpio_pullup_en(GPIO_NUM_0);
+  rtc_gpio_pulldown_dis(GPIO_NUM_0);
+
+  // Isolate unused RTC GPIOs to minimise leakage current
+  rtc_gpio_isolate(GPIO_NUM_1);   // battery ADC
+  rtc_gpio_isolate(GPIO_NUM_5);   // I2C SDA
+  rtc_gpio_isolate(GPIO_NUM_6);   // I2C SCL
+
+  // Blink user LED once as visual confirmation
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);   // LED on (active-low)
+  delay(150);
+  digitalWrite(LED_BUILTIN, HIGH);  // LED off
+
+  esp_deep_sleep_start();  // does not return
+}
+
 // ── BLE callbacks ────────────────────────────────────────────────────────
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override {
@@ -203,6 +238,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedAtMs   = millis();
     bleConnHandle      = desc->conn_handle;
     firstAudioSent     = false;
+    lastActivityMs     = millis();
     resetAudioTxState();
     Serial.printf("[BLE] Connected handle=%u\n", bleConnHandle);
   }
@@ -226,6 +262,13 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
     // Binary commands: first byte < 0x20 distinguishes from text "ping"
     if (val.size() >= 1 && static_cast<uint8_t>(val[0]) < 0x20) {
       const uint8_t* d = reinterpret_cast<const uint8_t*>(val.data());
+      if (d[0] == 0x02) {
+        // CMD_SLEEP: enter deep sleep (software power-off)
+        Serial.println("[CTRL] Sleep command received");
+        delay(100);  // let BLE write response reach the client
+        enterDeepSleep();
+        return;  // never reached
+      }
       if (d[0] == 0x01 && val.size() >= 9) {
         // CMD_SET_AUDIO_PARAMS: [0x01][gain_q12:i32le][noise_gate:i16le][soft_limit:i16le]
         int32_t g = static_cast<int32_t>(d[1] | (d[2]<<8) | (d[3]<<16) | (d[4]<<24));
@@ -765,6 +808,17 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { delay(10); }  // wait for USB-CDC host to connect (up to 3s)
 
+  // Log wake-up cause (useful for debugging deep-sleep wake)
+  esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
+  switch (wakeup) {
+    case ESP_SLEEP_WAKEUP_EXT0:      Serial.println("[POWER] Woke from deep sleep (BOOT button)"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD:  Serial.println("[POWER] Woke from deep sleep (touch pad)"); break;
+    case ESP_SLEEP_WAKEUP_TIMER:     Serial.println("[POWER] Woke from deep sleep (timer)"); break;
+    default:                         Serial.println("[POWER] Normal power-on / reset"); break;
+  }
+
+  lastActivityMs = millis();
+
   // I2C for MPU-6050: D4=GPIO5 (SDA), D5=GPIO6 (SCL)
   Wire.begin(D4, D5);
 
@@ -831,6 +885,12 @@ void loop() {
         advNextRetryMs = now + 100;
       }
     }
+  }
+
+  // Auto-sleep after prolonged inactivity (no BLE connection)
+  if (!bleClientConnected && (now - lastActivityMs >= IDLE_SLEEP_MS)) {
+    Serial.println("[POWER] Idle timeout — entering deep sleep");
+    enterDeepSleep();
   }
 
   // IMU must be polled every loop iteration — a throw is only ~300ms
