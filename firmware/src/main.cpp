@@ -129,6 +129,11 @@ static constexpr size_t   MIC_RING_SIZE      = 4;
 static int32_t micTargetGainQ12 = 20480; // 5.0× in Q12 (desired amplification)
 static int16_t inputNoiseGate   = 216;   // frame-RMS gate threshold (raw-mic units, pre-gain)
 static int16_t inputSoftLimit   = 18000; // peak output ceiling after gain
+// Tunable IMU params — adjustable at runtime via BLE CMD 0x03
+static float    imuAirborneG    = 0.50f;  // freefall detection threshold (g)
+static float    imuImpactG      = 1.80f;  // impact/catch detection threshold (g)
+static uint32_t imuLockoutMs    = 120;    // post-impact mute duration (ms)
+static uint32_t imuReacquireMs  = 150;    // recovery grace period (ms)
 static constexpr i2s_port_t I2S_PORT     = I2S_NUM_0;
 static constexpr int        I2S_CLK_PIN  = 42;  // XIAO S3 Sense PDM CLK
 static constexpr int        I2S_DATA_PIN = 41;  // XIAO S3 Sense PDM DATA
@@ -288,6 +293,29 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
         Serial.printf("[CTRL] Audio params: gain=%.1fx gate=%d limit=%d\n",
                       static_cast<float>(g) / 4096.0f, ng, sl);
       }
+      if (d[0] == 0x03 && val.size() >= 13) {
+        // CMD_SET_IMU_PARAMS: [0x03][airborne_g:f32le][impact_g:f32le][lockout_ms:u16le][reacquire_ms:u16le]
+        float ag, ig;
+        memcpy(&ag, d + 1, 4);
+        memcpy(&ig, d + 5, 4);
+        uint16_t lk = static_cast<uint16_t>(d[9] | (d[10]<<8));
+        uint16_t rq = static_cast<uint16_t>(d[11] | (d[12]<<8));
+        // Validate ranges
+        if (ag < 0.10f) ag = 0.10f;
+        if (ag > 1.00f) ag = 1.00f;
+        if (ig < 1.00f) ig = 1.00f;
+        if (ig > 8.00f) ig = 8.00f;
+        if (lk < 50) lk = 50;
+        if (lk > 1000) lk = 1000;
+        if (rq < 50) rq = 50;
+        if (rq > 1000) rq = 1000;
+        imuAirborneG = ag;
+        imuImpactG = ig;
+        imuLockoutMs = lk;
+        imuReacquireMs = rq;
+        Serial.printf("[CTRL] IMU params: airborne=%.2fg impact=%.2fg lockout=%ums reacquire=%ums\n",
+                      ag, ig, lk, rq);
+      }
       return;
     }
     // Text commands
@@ -318,12 +346,12 @@ void notifyGateState() {
 void updateGateState() {
   const uint32_t now = millis();
   const float mag = readAccelMagnitudeG();
-  constexpr float AIRBORNE_G      = 0.35f;
-  constexpr float IMPACT_G        = 2.20f;
+  const float AIRBORNE_G      = imuAirborneG;
+  const float IMPACT_G        = imuImpactG;
   constexpr float STATIONARY_LO_G = 0.7f;   // near 1g = at rest in someone's hand
   constexpr float STATIONARY_HI_G = 1.4f;
-  constexpr uint32_t LOCKOUT_MS   = 120;
-  constexpr uint32_t REACQ_MS     = 150;
+  const uint32_t LOCKOUT_MS   = imuLockoutMs;
+  const uint32_t REACQ_MS     = imuReacquireMs;
   constexpr uint32_t AIRBORNE_TIMEOUT_MS = 500;  // max time in airborne before auto-recover
   GateState prev = gateState;
   switch (gateState) {

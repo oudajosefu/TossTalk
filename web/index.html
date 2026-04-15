@@ -280,6 +280,34 @@
       </div>
 
       <details class="flash-section card">
+        <summary>Throw Sensitivity</summary>
+        <div class="flash-body">
+          <p style="font-size:0.85rem; color:var(--text-muted)">
+            Adjust how sensitive the microphone is to being thrown and caught.
+            Higher freefall threshold = more sensitive to toss. Lower impact threshold = more sensitive to catch.
+            Changes are not saved across device reboots.
+          </p>
+          <label style="display:block; font-size:0.85rem; margin-top:8px">
+            Freefall Threshold (<span id="imuAirborneVal">0.50</span>g)
+            <input id="imuAirborneSlider" type="range" min="10" max="100" value="50" step="1" style="width:100%" />
+          </label>
+          <label style="display:block; font-size:0.85rem; margin-top:8px">
+            Impact Threshold (<span id="imuImpactVal">1.80</span>g)
+            <input id="imuImpactSlider" type="range" min="10" max="80" value="18" step="1" style="width:100%" />
+          </label>
+          <label style="display:block; font-size:0.85rem; margin-top:8px">
+            Lockout Duration (<span id="imuLockoutVal">120</span>ms)
+            <input id="imuLockoutSlider" type="range" min="50" max="1000" value="120" step="10" style="width:100%" />
+          </label>
+          <label style="display:block; font-size:0.85rem; margin-top:8px">
+            Reacquire Duration (<span id="imuReacquireVal">150</span>ms)
+            <input id="imuReacquireSlider" type="range" min="50" max="1000" value="150" step="10" style="width:100%" />
+          </label>
+          <button id="applyImuBtn" class="flash-btn" style="margin-top:12px">Apply</button>
+        </div>
+      </details>
+
+      <details class="flash-section card">
         <summary>Device Power</summary>
         <div class="flash-body">
           <p style="font-size:0.85rem; color:var(--text-muted)">

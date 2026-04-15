@@ -7,6 +7,7 @@ import {
   DEFAULT_FW_URL,
   jitterQueue,
   sendAudioConfig,
+  sendImuConfig,
   sendSleep,
 } from "../core.js";
 
@@ -155,3 +156,57 @@ limitSlider.addEventListener("input", () => {
 });
 
 applyTuningBtn.addEventListener("click", applyTuning);
+
+// ── IMU Throw Sensitivity UI ──────────────────────────────────────────────
+const airborneSlider = document.getElementById("airborneSlider");
+const impactSlider = document.getElementById("impactSlider");
+const lockoutSlider = document.getElementById("lockoutSlider");
+const reacquireSlider = document.getElementById("reacquireSlider");
+const airborneVal = document.getElementById("airborneVal");
+const impactVal = document.getElementById("impactVal");
+const lockoutVal = document.getElementById("lockoutVal");
+const reacquireVal = document.getElementById("reacquireVal");
+const applyImuBtn = document.getElementById("applyImuBtn");
+const autoSendImuIn = document.getElementById("autoSendImu");
+
+function updateAirborneLabel() {
+  airborneVal.textContent = (parseInt(airborneSlider.value, 10) / 100).toFixed(
+    2,
+  );
+}
+function updateImpactLabel() {
+  impactVal.textContent = (parseInt(impactSlider.value, 10) / 10).toFixed(2);
+}
+function updateLockoutLabel() {
+  lockoutVal.textContent = lockoutSlider.value;
+}
+function updateReacquireLabel() {
+  reacquireVal.textContent = reacquireSlider.value;
+}
+
+function applyImuTuning() {
+  const ag = parseInt(airborneSlider.value, 10) / 100;
+  const ig = parseInt(impactSlider.value, 10) / 10;
+  const lk = parseInt(lockoutSlider.value, 10);
+  const rq = parseInt(reacquireSlider.value, 10);
+  sendImuConfig(ag, ig, lk, rq).catch((e) => log(`IMU tuning: ${e.message}`));
+}
+
+airborneSlider.addEventListener("input", () => {
+  updateAirborneLabel();
+  if (autoSendImuIn.checked) applyImuTuning();
+});
+impactSlider.addEventListener("input", () => {
+  updateImpactLabel();
+  if (autoSendImuIn.checked) applyImuTuning();
+});
+lockoutSlider.addEventListener("input", () => {
+  updateLockoutLabel();
+  if (autoSendImuIn.checked) applyImuTuning();
+});
+reacquireSlider.addEventListener("input", () => {
+  updateReacquireLabel();
+  if (autoSendImuIn.checked) applyImuTuning();
+});
+
+applyImuBtn.addEventListener("click", applyImuTuning);

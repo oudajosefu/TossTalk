@@ -5,6 +5,7 @@ import {
   on,
   stats,
   DEFAULT_FW_URL,
+  sendImuConfig,
   sendSleep,
 } from "./core.js";
 
@@ -195,6 +196,43 @@ flashBtn.addEventListener("click", async () => {
   }
   flashBtn.disabled = false;
 });
+
+// ── IMU Throw Sensitivity controls ─────────────────────────────────────────
+const imuAirborneSlider = document.getElementById("imuAirborneSlider");
+const imuImpactSlider = document.getElementById("imuImpactSlider");
+const imuLockoutSlider = document.getElementById("imuLockoutSlider");
+const imuReacquireSlider = document.getElementById("imuReacquireSlider");
+const imuAirborneVal = document.getElementById("imuAirborneVal");
+const imuImpactVal = document.getElementById("imuImpactVal");
+const imuLockoutVal = document.getElementById("imuLockoutVal");
+const imuReacquireVal = document.getElementById("imuReacquireVal");
+const applyImuBtn = document.getElementById("applyImuBtn");
+
+if (imuAirborneSlider) {
+  imuAirborneSlider.addEventListener("input", () => {
+    imuAirborneVal.textContent = (
+      parseInt(imuAirborneSlider.value, 10) / 100
+    ).toFixed(2);
+  });
+  imuImpactSlider.addEventListener("input", () => {
+    imuImpactVal.textContent = (
+      parseInt(imuImpactSlider.value, 10) / 10
+    ).toFixed(2);
+  });
+  imuLockoutSlider.addEventListener("input", () => {
+    imuLockoutVal.textContent = imuLockoutSlider.value;
+  });
+  imuReacquireSlider.addEventListener("input", () => {
+    imuReacquireVal.textContent = imuReacquireSlider.value;
+  });
+  applyImuBtn.addEventListener("click", () => {
+    const ag = parseInt(imuAirborneSlider.value, 10) / 100;
+    const ig = parseInt(imuImpactSlider.value, 10) / 10;
+    const lk = parseInt(imuLockoutSlider.value, 10);
+    const rq = parseInt(imuReacquireSlider.value, 10);
+    sendImuConfig(ag, ig, lk, rq).catch(() => {});
+  });
+}
 
 // ── Service worker ───────────────────────────────────────────────────────
 if ("serviceWorker" in navigator) {

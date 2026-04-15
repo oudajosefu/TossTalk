@@ -182,6 +182,17 @@ class BridgeWorker:
     def send_config(self, gain_q12: int, gate: int, limit: int) -> None:
         self._submit(self._send_config(gain_q12, gate, limit))
 
+    def send_imu_config(
+        self,
+        airborne_g: float,
+        impact_g: float,
+        lockout_ms: int,
+        reacquire_ms: int,
+    ) -> None:
+        self._submit(
+            self._send_imu_config(airborne_g, impact_g, lockout_ms, reacquire_ms)
+        )
+
     def send_sleep(self) -> None:
         self._submit(self._send_sleep())
 
@@ -223,6 +234,20 @@ class BridgeWorker:
             self._event_queue.put(("log", "Cannot send tuning: not connected"))
             return
         await self._ble_client.send_audio_config(gain_q12, gate, limit)
+
+    async def _send_imu_config(
+        self,
+        airborne_g: float,
+        impact_g: float,
+        lockout_ms: int,
+        reacquire_ms: int,
+    ) -> None:
+        if self._ble_client is None or not self._ble_client.is_connected:
+            self._event_queue.put(("log", "Cannot send IMU config: not connected"))
+            return
+        await self._ble_client.send_imu_config(
+            airborne_g, impact_g, lockout_ms, reacquire_ms
+        )
 
     async def _send_sleep(self) -> None:
         if self._ble_client is None or not self._ble_client.is_connected:
@@ -428,6 +453,50 @@ class BridgeGui:
             lambda: f"{int(self._limit_var.get())}",
         )
 
+        # Throw sensitivity
+        imu = ttk.LabelFrame(self._root, text="Throw sensitivity (live)")
+        imu.pack(fill="x", padx=8, pady=4)
+        self._airborne_var = tk.DoubleVar(value=0.50)
+        self._impact_var = tk.DoubleVar(value=1.80)
+        self._lockout_var = tk.DoubleVar(value=120.0)
+        self._reacquire_var = tk.DoubleVar(value=150.0)
+        self._make_slider(
+            imu,
+            "Freefall (g)",
+            self._airborne_var,
+            0.10,
+            1.00,
+            lambda: f"{self._airborne_var.get():.2f}",
+            self._push_imu_config,
+        )
+        self._make_slider(
+            imu,
+            "Impact (g)",
+            self._impact_var,
+            1.00,
+            8.00,
+            lambda: f"{self._impact_var.get():.2f}",
+            self._push_imu_config,
+        )
+        self._make_slider(
+            imu,
+            "Lockout (ms)",
+            self._lockout_var,
+            50.0,
+            1000.0,
+            lambda: f"{int(self._lockout_var.get())}",
+            self._push_imu_config,
+        )
+        self._make_slider(
+            imu,
+            "Reacquire (ms)",
+            self._reacquire_var,
+            50.0,
+            1000.0,
+            lambda: f"{int(self._reacquire_var.get())}",
+            self._push_imu_config,
+        )
+
         # Log pane
         log_frame = ttk.LabelFrame(self._root, text="Log")
         log_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -440,19 +509,21 @@ class BridgeGui:
         )
         self._log_text.pack(fill="both", expand=True, padx=6, pady=4)
 
-    def _make_slider(self, parent, label, var, lo, hi, fmt) -> None:
+    def _make_slider(self, parent, label, var, lo, hi, fmt, release_cb=None) -> None:
         row = ttk.Frame(parent)
         row.pack(fill="x", padx=6, pady=2)
         ttk.Label(row, text=label, width=12).pack(side="left")
         value_label = ttk.Label(row, text=fmt(), width=8, anchor="e")
         value_label.pack(side="right")
 
+        cb = release_cb if release_cb is not None else self._push_config
+
         def on_change(*_args) -> None:
             value_label.configure(text=fmt())
 
         def on_release(_evt=None) -> None:
             value_label.configure(text=fmt())
-            self._push_config()
+            cb()
 
         scale = ttk.Scale(
             row,
@@ -513,6 +584,13 @@ class BridgeGui:
         gate = int(round(self._gate_slider_var.get()))
         limit = int(round(self._limit_var.get()))
         self._worker.send_config(gain_q12, gate, limit)
+
+    def _push_imu_config(self) -> None:
+        airborne_g = self._airborne_var.get()
+        impact_g = self._impact_var.get()
+        lockout_ms = int(round(self._lockout_var.get()))
+        reacquire_ms = int(round(self._reacquire_var.get()))
+        self._worker.send_imu_config(airborne_g, impact_g, lockout_ms, reacquire_ms)
 
     # ── event drain ──────────────────────────────────────────────────────────
 

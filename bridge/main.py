@@ -80,6 +80,30 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Soft limiter ceiling (1000-32767, default: firmware default 18000)",
     )
+    p.add_argument(
+        "--airborne-g",
+        type=float,
+        default=None,
+        help="Freefall detection threshold in g (0.10-1.00, default: firmware default 0.50)",
+    )
+    p.add_argument(
+        "--impact-g",
+        type=float,
+        default=None,
+        help="Impact/catch detection threshold in g (1.00-8.00, default: firmware default 1.80)",
+    )
+    p.add_argument(
+        "--lockout-ms",
+        type=int,
+        default=None,
+        help="Post-impact mute duration in ms (50-1000, default: firmware default 120)",
+    )
+    p.add_argument(
+        "--reacquire-ms",
+        type=int,
+        default=None,
+        help="Recovery grace period in ms (50-1000, default: firmware default 150)",
+    )
     return p.parse_args()
 
 
@@ -207,6 +231,24 @@ def main() -> None:
             f"gate={noise_gate} limit={soft_limit}"
         )
 
+    # Build IMU config if any throw-sensitivity args were given
+    imu_config = None
+    if (
+        args.airborne_g is not None
+        or args.impact_g is not None
+        or args.lockout_ms is not None
+        or args.reacquire_ms is not None
+    ):
+        airborne_g = args.airborne_g if args.airborne_g is not None else 0.50
+        impact_g = args.impact_g if args.impact_g is not None else 1.80
+        lockout_ms = args.lockout_ms if args.lockout_ms is not None else 120
+        reacquire_ms = args.reacquire_ms if args.reacquire_ms is not None else 150
+        imu_config = (airborne_g, impact_g, lockout_ms, reacquire_ms)
+        print(
+            f"IMU tuning: airborne={airborne_g:.2f}g impact={impact_g:.2f}g "
+            f"lockout={lockout_ms}ms reacquire={reacquire_ms}ms"
+        )
+
     async def run_bridge() -> None:
         """Async entry point — runs BLE client with clean shutdown on Ctrl+C."""
         # Start audio output inside the async context so that PortAudio's
@@ -225,7 +267,7 @@ def main() -> None:
         else:
             loop.add_signal_handler(signal.SIGINT, stop_event.set)
 
-        # Send audio config once after first successful connect
+        # Send audio/IMU config once after first successful connect
         async def run_with_config() -> None:
             config_sent = False
             ble_client._running = True
@@ -238,9 +280,12 @@ def main() -> None:
                         backoff = min(backoff * 2, 30.0)
                         continue
                     backoff = 1.0
-                    if audio_config and not config_sent:
+                    if not config_sent:
                         await asyncio.sleep(0.5)  # let firmware finish settling
-                        await ble_client.send_audio_config(*audio_config)
+                        if audio_config:
+                            await ble_client.send_audio_config(*audio_config)
+                        if imu_config:
+                            await ble_client.send_imu_config(*imu_config)
                         config_sent = True
                 while ble_client._running and ble_client.is_connected:
                     await asyncio.sleep(0.5)
@@ -248,7 +293,7 @@ def main() -> None:
                     ble_client._reset_assembly()
                     await asyncio.sleep(1.0)
 
-        if audio_config:
+        if audio_config or imu_config:
             ble_task = asyncio.create_task(run_with_config())
         else:
             ble_task = asyncio.create_task(ble_client.run())

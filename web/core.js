@@ -886,6 +886,35 @@ export async function sendAudioConfig(gainQ12, noiseGate, softLimit) {
   }
 }
 
+// ── Runtime IMU config (write to firmware via Control characteristic) ─────
+export async function sendImuConfig(
+  airborneG,
+  impactG,
+  lockoutMs,
+  reacquireMs,
+) {
+  if (!activeControlChar) {
+    emit("log", "Control char not available");
+    return;
+  }
+  const buf = new ArrayBuffer(13);
+  const view = new DataView(buf);
+  view.setUint8(0, 0x03); // CMD_SET_IMU_PARAMS
+  view.setFloat32(1, airborneG, true); // airborne_g LE
+  view.setFloat32(5, impactG, true); // impact_g LE
+  view.setUint16(9, lockoutMs, true); // lockout_ms LE
+  view.setUint16(11, reacquireMs, true); // reacquire_ms LE
+  try {
+    await activeControlChar.writeValueWithoutResponse(buf);
+    emit(
+      "log",
+      `IMU config sent: airborne=${airborneG.toFixed(2)}g impact=${impactG.toFixed(2)}g lockout=${lockoutMs}ms reacquire=${reacquireMs}ms`,
+    );
+  } catch (e) {
+    emit("log", `IMU config write failed: ${e.message}`);
+  }
+}
+
 // ── Sleep command (deep-sleep / power-off the device) ────────────────────
 export async function sendSleep() {
   if (!activeControlChar) {

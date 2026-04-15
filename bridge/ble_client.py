@@ -220,6 +220,40 @@ class TossTalkBleClient:
             log.error("Failed to send audio config: %s", e)
             return False
 
+    async def send_imu_config(
+        self,
+        airborne_g: float,
+        impact_g: float,
+        lockout_ms: int,
+        reacquire_ms: int,
+    ) -> bool:
+        """Send IMU throw-detection parameters to the device via the Control characteristic."""
+        if not self.is_connected or self._client is None:
+            log.warning("Cannot send IMU config: not connected")
+            return False
+        airborne_g = max(0.10, min(1.00, airborne_g))
+        impact_g = max(1.00, min(8.00, impact_g))
+        lockout_ms = max(50, min(1000, lockout_ms))
+        reacquire_ms = max(50, min(1000, reacquire_ms))
+        payload = struct.pack(
+            "<BffHH", 0x03, airborne_g, impact_g, lockout_ms, reacquire_ms
+        )
+        try:
+            await self._client.write_gatt_char(
+                CONTROL_CHAR_UUID, payload, response=False
+            )
+            log.info(
+                "IMU config sent: airborne=%.2fg impact=%.2fg lockout=%dms reacquire=%dms",
+                airborne_g,
+                impact_g,
+                lockout_ms,
+                reacquire_ms,
+            )
+            return True
+        except Exception as e:
+            log.error("Failed to send IMU config: %s", e)
+            return False
+
     async def send_sleep(self) -> bool:
         """Send the sleep (power off) command to the device."""
         if not self.is_connected or self._client is None:

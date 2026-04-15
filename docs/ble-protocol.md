@@ -81,3 +81,15 @@ The device acknowledges via BLE (100 ms grace period), then enters ESP32-S3 deep
 - **BOOT button** (GPIO0, ext0 LOW) — press to wake immediately.
 
 **Inactivity auto-sleep:** If no BLE client is connected for 10 continuous minutes the device enters deep sleep automatically (no command required).
+
+**`0x03` — Set IMU Parameters** (13 bytes)
+
+| Offset | Type   | Field        | Range     | Default | Description                          |
+| ------ | ------ | ------------ | --------- | ------- | ------------------------------------ |
+| 0      | u8     | cmd          | `0x03`    |         | Command ID                           |
+| 1..4   | f32 LE | airborne_g   | 0.10–1.00 | 0.50    | Freefall detection threshold (g)     |
+| 5..8   | f32 LE | impact_g     | 1.00–8.00 | 1.80    | Impact/catch detection threshold (g) |
+| 9..10  | u16 LE | lockout_ms   | 50–1000   | 120     | Post-impact mute duration (ms)       |
+| 11..12 | u16 LE | reacquire_ms | 50–1000   | 150     | Recovery grace period (ms)           |
+
+Values are clamped to their valid ranges by the firmware. Changes take effect immediately but do not persist across reboots. Higher `airborne_g` makes freefall detection more sensitive (triggers on less extreme weightlessness). Lower `impact_g` makes catch detection more sensitive (triggers on softer catches).

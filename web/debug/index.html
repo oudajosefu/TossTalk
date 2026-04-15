@@ -84,6 +84,36 @@
       </section>
 
       <section class="panel">
+        <h2>Throw Sensitivity</h2>
+        <p class="sub">Adjust IMU throw detection thresholds. Higher freefall = more sensitive to toss; lower impact = more sensitive to catch.</p>
+        <div class="tuning-grid">
+          <label>
+            Freefall Threshold (<span id="airborneVal">0.50</span>g)
+            <input id="airborneSlider" type="range" min="10" max="100" value="50" step="1" />
+          </label>
+          <label>
+            Impact Threshold (<span id="impactVal">1.80</span>g)
+            <input id="impactSlider" type="range" min="10" max="80" value="18" step="1" />
+          </label>
+          <label>
+            Lockout Duration (<span id="lockoutVal">120</span>ms)
+            <input id="lockoutSlider" type="range" min="50" max="1000" value="120" step="10" />
+          </label>
+          <label>
+            Reacquire Duration (<span id="reacquireVal">150</span>ms)
+            <input id="reacquireSlider" type="range" min="50" max="1000" value="150" step="10" />
+          </label>
+        </div>
+        <div style="margin-top:12px">
+          <button id="applyImuBtn">Apply</button>
+          <label class="checkline" style="display:inline-flex;margin-top:0;margin-left:12px">
+            <input id="autoSendImu" type="checkbox" />
+            Auto-send on change
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Flashing</h2>
         <p class="sub">Chromium desktop only. Use either a hosted merged firmware binary URL or choose a local .bin file.
           After flashing, press the RESET button on the device before reconnecting.</p>
