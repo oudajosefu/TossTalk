@@ -38,3 +38,5 @@ compile_commands.json
 # Local env
 .env
 .env.local
+
+.vs/
